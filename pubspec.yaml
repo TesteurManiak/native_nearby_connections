@@ -1,5 +1,5 @@
 name: native_nearby_connections
-description: "A new Flutter plugin project."
+description: "Google Nearby Connections for Flutter (Android and iOS), built on Pigeon."
 version: 0.0.1
 homepage:
 
@@ -37,6 +37,8 @@ flutter:
     platforms:
       android:
         package: com.maniak.native_nearby_connections
+        pluginClass: NativeNearbyConnectionsPlugin
+      ios:
         pluginClass: NativeNearbyConnectionsPlugin
 
   # To add assets to your plugin package, add an assets section, like this:

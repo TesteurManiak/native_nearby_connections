@@ -7,6 +7,8 @@ import 'package:pigeon/pigeon.dart';
     kotlinOptions: KotlinOptions(
       package: 'com.maniak.native_nearby_connections',
     ),
+    swiftOut:
+        'ios/native_nearby_connections/Sources/native_nearby_connections/Messages.g.swift',
     dartPackageName: 'native_nearby_connections',
   ),
 )

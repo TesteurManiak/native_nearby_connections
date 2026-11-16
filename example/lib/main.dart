@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -67,6 +68,8 @@ class _MyAppState extends State<MyApp> implements NearbyFlutterApi {
   /// Asks for Nearby's runtime permissions; ones that don't apply to the
   /// device's Android version are reported granted by permission_handler.
   Future<void> _requestPermissions() async {
+    // iOS prompts on first Nearby use from the Info.plist usage strings.
+    if (!Platform.isAndroid) return;
     final statuses = await [
       Permission.bluetoothScan,
       Permission.bluetoothAdvertise,
