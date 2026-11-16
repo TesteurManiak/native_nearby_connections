@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:native_nearby_connections/native_nearby_connections.dart';
 import 'package:permission_handler/permission_handler.dart';
 
