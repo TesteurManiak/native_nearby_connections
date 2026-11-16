@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -95,8 +96,9 @@ class _MyAppState extends State<MyApp> implements NearbyFlutterApi {
       await action();
       _add(label);
       return true;
-    } on PlatformException catch (e) {
+    } on PlatformException catch (e, s) {
       _add('$label failed: ${e.message}');
+      log('Failed', error: e, stackTrace: s, name: '_run($label)');
       return false;
     }
   }
