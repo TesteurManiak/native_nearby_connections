@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'native_nearby_connections_platform_interface.dart';
-import 'src/gen/messages.g.dart';
+import 'gen/messages.g.dart';
 
 /// An implementation of [NativeNearbyConnectionsPlatform] backed by Pigeon.
 class PigeonNativeNearbyConnections extends NativeNearbyConnectionsPlatform {

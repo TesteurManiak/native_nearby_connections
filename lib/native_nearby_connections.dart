@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'native_nearby_connections_platform_interface.dart';
+import 'src/native_nearby_connections_platform_interface.dart';
 import 'src/gen/messages.g.dart';
 
 export 'src/gen/messages.g.dart'

@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'native_nearby_connections_pigeon.dart';
-import 'src/gen/messages.g.dart';
+import 'gen/messages.g.dart';
 
 abstract class NativeNearbyConnectionsPlatform extends PlatformInterface {
   /// Constructs a NativeNearbyConnectionsPlatform.
