@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.maniak.native_nearby_connections_example"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
