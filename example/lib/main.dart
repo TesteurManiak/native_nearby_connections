@@ -68,15 +68,19 @@ class _MyAppState extends State<MyApp> implements NearbyFlutterApi {
   /// Asks for Nearby's runtime permissions; ones that don't apply to the
   /// device's Android version are reported granted by permission_handler.
   Future<void> _requestPermissions() async {
-    // iOS prompts on first Nearby use from the Info.plist usage strings.
-    if (!Platform.isAndroid) return;
-    final statuses = await [
-      Permission.bluetoothScan,
-      Permission.bluetoothAdvertise,
-      Permission.bluetoothConnect,
-      Permission.nearbyWifiDevices,
-      Permission.location,
-    ].request();
+    final statuses =
+        await (Platform.isIOS
+                // Local network prompts by itself on first Bonjour use; location
+                // lets Nearby join a peer's Wi-Fi hotspot (see Runner.entitlements).
+                ? [Permission.bluetooth, Permission.locationWhenInUse]
+                : [
+                    Permission.bluetoothScan,
+                    Permission.bluetoothAdvertise,
+                    Permission.bluetoothConnect,
+                    Permission.nearbyWifiDevices,
+                    Permission.location,
+                  ])
+            .request();
     final denied = [
       for (final e in statuses.entries)
         if (!e.value.isGranted) e.key,
