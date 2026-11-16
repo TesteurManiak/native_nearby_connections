@@ -2,7 +2,7 @@ import 'package:pigeon/pigeon.dart';
 
 @ConfigurePigeon(
   PigeonOptions(
-    dartOut: 'lib/src/messages.g.dart',
+    dartOut: 'lib/src/gen/messages.g.dart',
     kotlinOut: 'android/src/main/kotlin/com/maniak/native_nearby_connections/Messages.g.kt',
     kotlinOptions: KotlinOptions(
       package: 'com.maniak.native_nearby_connections',

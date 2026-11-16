@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 
 import 'native_nearby_connections_platform_interface.dart';
-import 'src/messages.g.dart';
+import 'src/gen/messages.g.dart';
 
-export 'src/messages.g.dart'
+export 'src/gen/messages.g.dart'
     show
         NearbyStrategy,
         EndpointInfo,

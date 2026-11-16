@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:native_nearby_connections/native_nearby_connections.dart';
 import 'package:native_nearby_connections/native_nearby_connections_pigeon.dart';
 import 'package:native_nearby_connections/native_nearby_connections_platform_interface.dart';
-import 'package:native_nearby_connections/src/messages.g.dart';
+import 'package:native_nearby_connections/src/gen/messages.g.dart';
 
 const _prefix = 'dev.flutter.pigeon.native_nearby_connections';
 
