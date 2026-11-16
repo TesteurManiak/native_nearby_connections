@@ -11,11 +11,7 @@ const _serviceId = 'com.maniak.native_nearby_connections.example';
 
 enum PeerState { found, connecting, connected }
 
-class Peer {
-  Peer(this.name, this.state);
-  final String name;
-  PeerState state;
-}
+class Peer(final String name, var PeerState state);
 
 /// Owns the Nearby session and its state; the UI listens for changes.
 ///
@@ -30,6 +26,7 @@ class ConnectionManager extends ChangeNotifier implements NearbyFlutterApi {
   final name = 'device-${DateTime.now().millisecondsSinceEpoch % 10000}';
   final peers = <String, Peer>{};
   final logLines = <String>[];
+
   bool advertising = false;
   bool startingAdvertising = false;
   bool discovering = false;
@@ -61,29 +58,33 @@ class ConnectionManager extends ChangeNotifier implements NearbyFlutterApi {
 
   void clearLog() => _update(logLines.clear);
 
-  /// Asks for Nearby's runtime permissions; ones that don't apply to the
-  /// device's Android version are reported granted by permission_handler.
+  /// Asks for Nearby's runtime permissions and logs any not granted.
   Future<void> _requestPermissions() async {
-    final statuses =
-        await (Platform.isIOS
-                // Local network prompts by itself on first Bonjour use; location
-                // lets Nearby join a peer's Wi-Fi hotspot (see Runner.entitlements).
-                ? [Permission.bluetooth, Permission.locationWhenInUse]
-                : [
-                    Permission.bluetoothScan,
-                    Permission.bluetoothAdvertise,
-                    Permission.bluetoothConnect,
-                    Permission.nearbyWifiDevices,
-                    Permission.location,
-                  ])
-            .request();
+    final statuses = Platform.isIOS
+        ? await _requestIosPermissions()
+        : await _requestAndroidPermissions();
     final denied = [
       for (final e in statuses.entries)
         if (!e.value.isGranted) e.key,
     ];
-    // Location is only declared up to Android 12, so it reads denied on 13+.
     if (denied.isNotEmpty) _add('Not granted: $denied');
   }
+
+  /// Local network prompts by itself on first Bonjour use; location lets
+  /// Nearby join a peer's Wi-Fi hotspot (see Runner.entitlements).
+  Future<Map<Permission, PermissionStatus>> _requestIosPermissions() =>
+      [Permission.bluetooth, Permission.locationWhenInUse].request();
+
+  /// Ones that don't apply to the device's Android version are reported
+  /// granted by permission_handler. Location is only declared up to
+  /// Android 12, so it reads denied on 13+.
+  Future<Map<Permission, PermissionStatus>> _requestAndroidPermissions() => [
+    Permission.bluetoothScan,
+    Permission.bluetoothAdvertise,
+    Permission.bluetoothConnect,
+    Permission.nearbyWifiDevices,
+    Permission.location,
+  ].request();
 
   /// Runs [action], logs the outcome and returns whether it succeeded.
   Future<bool> _run(String label, Future<void> Function() action) async {
