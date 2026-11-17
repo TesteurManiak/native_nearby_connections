@@ -102,6 +102,8 @@ extension NativeNearbyConnectionsPlugin: @preconcurrency FlutterPlugin {
 
 extension NativeNearbyConnectionsPlugin: @preconcurrency NearbyHostApi {
   func startAdvertising(name: String, serviceId: String, strategy: NearbyStrategy) async throws {
+    // A session left over from before a Dart hot restart would fail the start as already advertising.
+    try stopAdvertising()
     let manager = ConnectionManager(serviceID: serviceId, strategy: Self.strategy(strategy))
     manager.delegate = self
     let advertiser = Advertiser(connectionManager: manager)
@@ -112,6 +114,8 @@ extension NativeNearbyConnectionsPlugin: @preconcurrency NearbyHostApi {
   }
 
   func startDiscovery(serviceId: String, strategy: NearbyStrategy) async throws {
+    // A session left over from before a Dart hot restart would fail the start as already discovering.
+    try stopDiscovery()
     let manager = ConnectionManager(serviceID: serviceId, strategy: Self.strategy(strategy))
     manager.delegate = self
     let discoverer = Discoverer(connectionManager: manager)

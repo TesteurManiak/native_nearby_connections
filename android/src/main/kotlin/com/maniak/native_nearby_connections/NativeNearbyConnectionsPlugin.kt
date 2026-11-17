@@ -96,11 +96,15 @@ class NativeNearbyConnectionsPlugin : FlutterPlugin, NearbyHostApi {
     }
 
     override suspend fun startAdvertising(name: String, serviceId: String, strategy: NearbyStrategy) {
+        // A session left over from before a Dart hot restart would fail with STATUS_ALREADY_ADVERTISING.
+        client.stopAdvertising()
         val options = AdvertisingOptions.Builder().setStrategy(strategy.toGms()).build()
         client.startAdvertising(name, serviceId, connectionLifecycleCallback, options).await()
     }
 
     override suspend fun startDiscovery(serviceId: String, strategy: NearbyStrategy) {
+        // A session left over from before a Dart hot restart would fail with STATUS_ALREADY_DISCOVERING.
+        client.stopDiscovery()
         val options = DiscoveryOptions.Builder().setStrategy(strategy.toGms()).build()
         client.startDiscovery(serviceId, endpointDiscoveryCallback, options).await()
     }
