@@ -188,12 +188,23 @@ private func nilOrValue<T>(_ value: Any?) -> T? {
 }
 
 
+/// Connection topology. Advertiser and discoverer must use the same strategy.
+///
+/// See https://developers.google.com/nearby/connections/strategies.
 enum NearbyStrategy: Int, CaseIterable {
+  /// M-to-N: every device can advertise, discover and hold several
+  /// connections. Lowest bandwidth; suits small payloads and mesh-like use
+  /// such as multiplayer games.
   case cluster = 0
+  /// 1-to-N: one hub accepts many spokes, each device is a hub or a spoke
+  /// but not both. Higher bandwidth than [cluster].
   case star = 1
+  /// 1-to-1: a single connection at a time. Highest bandwidth.
   case pointToPoint = 2
 }
 
+/// A nearby advertiser reported by [NearbyFlutterApi.onEndpointFound].
+///
 /// Generated class from Pigeon that represents data sent in messages.
 struct EndpointInfo: Hashable, CustomStringConvertible {
   var endpointId: String? = nil
@@ -239,10 +250,17 @@ struct EndpointInfo: Hashable, CustomStringConvertible {
   }
 }
 
+/// Details of a pending connection, given by
+/// [NearbyFlutterApi.onConnectionInitiated] on both sides.
+///
 /// Generated class from Pigeon that represents data sent in messages.
 struct ConnectionInfo: Hashable, CustomStringConvertible {
+  /// Name the remote device advertised or requested with.
   var endpointName: String? = nil
+  /// Short code to show on both devices so users can confirm they match
+  /// before accepting. Connections that skip this check are insecure.
   var authDigits: String? = nil
+  /// True when the remote device requested the connection.
   var isIncoming: Bool? = nil
 
 
@@ -284,7 +302,11 @@ struct ConnectionInfo: Hashable, CustomStringConvertible {
   }
 }
 
+/// Data received from a connected endpoint.
+///
 /// [type] mirrors Android `Payload.Type`: 1 = bytes, 2 = file, 3 = stream.
+/// [bytes] is set for bytes payloads, [filePath] for file payloads. A file is
+/// only complete once [TransferUpdate.status] reports success.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 struct PayloadMessage: Hashable, CustomStringConvertible {
@@ -336,6 +358,8 @@ struct PayloadMessage: Hashable, CustomStringConvertible {
   }
 }
 
+/// Progress of an incoming or outgoing payload.
+///
 /// [status] mirrors Android `PayloadTransferUpdate.Status`:
 /// 1 = success, 2 = failure, 3 = in progress, 4 = canceled.
 ///
@@ -669,14 +693,29 @@ class NearbyHostApiSetup {
   }
 }
 
+/// Events from Nearby Connections. Implement and register with
+/// `NativeNearbyConnections.setListener`.
+///
 /// Generated protocol from Pigeon that represents Flutter messages that can be called from Swift.
 protocol NearbyFlutterApiProtocol {
+  /// Discovery found an advertiser with the same service id.
   @MainActor func onEndpointFound(info infoArg: EndpointInfo) async throws
+  /// A previously found advertiser is no longer reachable.
   @MainActor func onEndpointLost(endpointId endpointIdArg: String) async throws
+  /// A connection was requested, by either side. Both sides must call
+  /// `acceptConnection` (ideally after users compare [ConnectionInfo.authDigits])
+  /// or `rejectConnection`.
   @MainActor func onConnectionInitiated(endpointId endpointIdArg: String, info infoArg: ConnectionInfo) async throws
+  /// Outcome of a connection request, using Android `ConnectionsStatusCodes`:
+  /// 0 = connected, 8004 = rejected by one or both sides, 13 = connection
+  /// broke before it was accepted.
   @MainActor func onConnectionResult(endpointId endpointIdArg: String, statusCode statusCodeArg: Int64) async throws
+  /// The connection ended. No more data can be sent or received.
   @MainActor func onDisconnected(endpointId endpointIdArg: String) async throws
+  /// A payload started arriving. Bytes payloads are complete here; wait for
+  /// [onPayloadTransferUpdate] success before reading a file payload.
   @MainActor func onPayloadReceived(endpointId endpointIdArg: String, payload payloadArg: PayloadMessage) async throws
+  /// Progress of a payload being sent or received.
   @MainActor func onPayloadTransferUpdate(endpointId endpointIdArg: String, update updateArg: TransferUpdate) async throws
 }
 class NearbyFlutterApi: NearbyFlutterApiProtocol {
@@ -689,6 +728,7 @@ class NearbyFlutterApi: NearbyFlutterApiProtocol {
   var codec: MessagesPigeonCodec {
     return MessagesPigeonCodec.shared
   }
+  /// Discovery found an advertiser with the same service id.
   @MainActor func onEndpointFound(info infoArg: EndpointInfo) async throws {
     return try await withCheckedThrowingContinuation { continuation in
       let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onEndpointFound\(messageChannelSuffix)"
@@ -709,6 +749,7 @@ class NearbyFlutterApi: NearbyFlutterApiProtocol {
       }
     }
   }
+  /// A previously found advertiser is no longer reachable.
   @MainActor func onEndpointLost(endpointId endpointIdArg: String) async throws {
     return try await withCheckedThrowingContinuation { continuation in
       let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onEndpointLost\(messageChannelSuffix)"
@@ -729,6 +770,9 @@ class NearbyFlutterApi: NearbyFlutterApiProtocol {
       }
     }
   }
+  /// A connection was requested, by either side. Both sides must call
+  /// `acceptConnection` (ideally after users compare [ConnectionInfo.authDigits])
+  /// or `rejectConnection`.
   @MainActor func onConnectionInitiated(endpointId endpointIdArg: String, info infoArg: ConnectionInfo) async throws {
     return try await withCheckedThrowingContinuation { continuation in
       let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onConnectionInitiated\(messageChannelSuffix)"
@@ -749,6 +793,9 @@ class NearbyFlutterApi: NearbyFlutterApiProtocol {
       }
     }
   }
+  /// Outcome of a connection request, using Android `ConnectionsStatusCodes`:
+  /// 0 = connected, 8004 = rejected by one or both sides, 13 = connection
+  /// broke before it was accepted.
   @MainActor func onConnectionResult(endpointId endpointIdArg: String, statusCode statusCodeArg: Int64) async throws {
     return try await withCheckedThrowingContinuation { continuation in
       let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onConnectionResult\(messageChannelSuffix)"
@@ -769,6 +816,7 @@ class NearbyFlutterApi: NearbyFlutterApiProtocol {
       }
     }
   }
+  /// The connection ended. No more data can be sent or received.
   @MainActor func onDisconnected(endpointId endpointIdArg: String) async throws {
     return try await withCheckedThrowingContinuation { continuation in
       let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onDisconnected\(messageChannelSuffix)"
@@ -789,6 +837,8 @@ class NearbyFlutterApi: NearbyFlutterApiProtocol {
       }
     }
   }
+  /// A payload started arriving. Bytes payloads are complete here; wait for
+  /// [onPayloadTransferUpdate] success before reading a file payload.
   @MainActor func onPayloadReceived(endpointId endpointIdArg: String, payload payloadArg: PayloadMessage) async throws {
     return try await withCheckedThrowingContinuation { continuation in
       let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onPayloadReceived\(messageChannelSuffix)"
@@ -809,6 +859,7 @@ class NearbyFlutterApi: NearbyFlutterApiProtocol {
       }
     }
   }
+  /// Progress of a payload being sent or received.
   @MainActor func onPayloadTransferUpdate(endpointId endpointIdArg: String, update updateArg: TransferUpdate) async throws {
     return try await withCheckedThrowingContinuation { continuation in
       let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onPayloadTransferUpdate\(messageChannelSuffix)"

@@ -201,9 +201,24 @@ class FlutterError (
   val details: Any? = null
 ) : RuntimeException()
 
+/**
+ * Connection topology. Advertiser and discoverer must use the same strategy.
+ *
+ * See https://developers.google.com/nearby/connections/strategies.
+ */
 enum class NearbyStrategy(val raw: Int) {
+  /**
+   * M-to-N: every device can advertise, discover and hold several
+   * connections. Lowest bandwidth; suits small payloads and mesh-like use
+   * such as multiplayer games.
+   */
   CLUSTER(0),
+  /**
+   * 1-to-N: one hub accepts many spokes, each device is a hub or a spoke
+   * but not both. Higher bandwidth than [cluster].
+   */
   STAR(1),
+  /** 1-to-1: a single connection at a time. Highest bandwidth. */
   POINT_TO_POINT(2);
 
   companion object {
@@ -215,7 +230,11 @@ enum class NearbyStrategy(val raw: Int) {
   }
 }
 
-/** Generated class from Pigeon that represents data sent in messages. */
+/**
+ * A nearby advertiser reported by [NearbyFlutterApi.onEndpointFound].
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
 data class EndpointInfo (
   val endpointId: String? = null,
   val name: String? = null,
@@ -260,10 +279,21 @@ data class EndpointInfo (
   }
 }
 
-/** Generated class from Pigeon that represents data sent in messages. */
+/**
+ * Details of a pending connection, given by
+ * [NearbyFlutterApi.onConnectionInitiated] on both sides.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
 data class ConnectionInfo (
+  /** Name the remote device advertised or requested with. */
   val endpointName: String? = null,
+  /**
+   * Short code to show on both devices so users can confirm they match
+   * before accepting. Connections that skip this check are insecure.
+   */
   val authDigits: String? = null,
+  /** True when the remote device requested the connection. */
   val isIncoming: Boolean? = null
 )
  {
@@ -306,7 +336,11 @@ data class ConnectionInfo (
 }
 
 /**
+ * Data received from a connected endpoint.
+ *
  * [type] mirrors Android `Payload.Type`: 1 = bytes, 2 = file, 3 = stream.
+ * [bytes] is set for bytes payloads, [filePath] for file payloads. A file is
+ * only complete once [TransferUpdate.status] reports success.
  *
  * Generated class from Pigeon that represents data sent in messages.
  */
@@ -359,6 +393,8 @@ data class PayloadMessage (
 }
 
 /**
+ * Progress of an incoming or outgoing payload.
+ *
  * [status] mirrors Android `PayloadTransferUpdate.Status`:
  * 1 = success, 2 = failure, 3 = in progress, 4 = canceled.
  *
@@ -725,7 +761,12 @@ interface NearbyHostApi {
     }
   }
 }
-/** Generated class from Pigeon that represents Flutter messages that can be called from Kotlin. */
+/**
+ * Events from Nearby Connections. Implement and register with
+ * `NativeNearbyConnections.setListener`.
+ *
+ * Generated class from Pigeon that represents Flutter messages that can be called from Kotlin.
+ */
 class NearbyFlutterApi(private val binaryMessenger: BinaryMessenger, private val messageChannelSuffix: String = "") {
   companion object {
     /** The codec used by NearbyFlutterApi. */
@@ -733,6 +774,7 @@ class NearbyFlutterApi(private val binaryMessenger: BinaryMessenger, private val
       MessagesPigeonCodec()
     }
   }
+  /** Discovery found an advertiser with the same service id. */
   suspend fun onEndpointFound(infoArg: EndpointInfo)
 {
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
@@ -752,6 +794,7 @@ class NearbyFlutterApi(private val binaryMessenger: BinaryMessenger, private val
       }
     }
   }
+  /** A previously found advertiser is no longer reachable. */
   suspend fun onEndpointLost(endpointIdArg: String)
 {
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
@@ -771,6 +814,11 @@ class NearbyFlutterApi(private val binaryMessenger: BinaryMessenger, private val
       }
     }
   }
+  /**
+   * A connection was requested, by either side. Both sides must call
+   * `acceptConnection` (ideally after users compare [ConnectionInfo.authDigits])
+   * or `rejectConnection`.
+   */
   suspend fun onConnectionInitiated(endpointIdArg: String, infoArg: ConnectionInfo)
 {
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
@@ -790,6 +838,11 @@ class NearbyFlutterApi(private val binaryMessenger: BinaryMessenger, private val
       }
     }
   }
+  /**
+   * Outcome of a connection request, using Android `ConnectionsStatusCodes`:
+   * 0 = connected, 8004 = rejected by one or both sides, 13 = connection
+   * broke before it was accepted.
+   */
   suspend fun onConnectionResult(endpointIdArg: String, statusCodeArg: Long)
 {
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
@@ -809,6 +862,7 @@ class NearbyFlutterApi(private val binaryMessenger: BinaryMessenger, private val
       }
     }
   }
+  /** The connection ended. No more data can be sent or received. */
   suspend fun onDisconnected(endpointIdArg: String)
 {
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
@@ -828,6 +882,10 @@ class NearbyFlutterApi(private val binaryMessenger: BinaryMessenger, private val
       }
     }
   }
+  /**
+   * A payload started arriving. Bytes payloads are complete here; wait for
+   * [onPayloadTransferUpdate] success before reading a file payload.
+   */
   suspend fun onPayloadReceived(endpointIdArg: String, payloadArg: PayloadMessage)
 {
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
@@ -847,6 +905,7 @@ class NearbyFlutterApi(private val binaryMessenger: BinaryMessenger, private val
       }
     }
   }
+  /** Progress of a payload being sent or received. */
   suspend fun onPayloadTransferUpdate(endpointIdArg: String, updateArg: TransferUpdate)
 {
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""

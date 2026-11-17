@@ -10,9 +10,9 @@ import 'package:flutter/services.dart';
 import 'package:meta/meta.dart' show immutable, protected, visibleForTesting;
 
 Object? _extractReplyValueOrThrow(
-    List<Object?>? replyList,
-    String channelName, {
-    required bool isNullValid,
+  List<Object?>? replyList,
+  String channelName, {
+  required bool isNullValid,
 }) {
   if (replyList == null) {
     throw PlatformException(
@@ -34,8 +34,11 @@ Object? _extractReplyValueOrThrow(
   return replyList.firstOrNull;
 }
 
-
-List<Object?> wrapResponse({Object? result, PlatformException? error, bool empty = false}) {
+List<Object?> wrapResponse({
+  Object? result,
+  PlatformException? error,
+  bool empty = false,
+}) {
   if (empty) {
     return <Object?>[];
   }
@@ -44,6 +47,7 @@ List<Object?> wrapResponse({Object? result, PlatformException? error, bool empty
   }
   return <Object?>[error.code, error.message, error.details];
 }
+
 bool _deepEquals(Object? a, Object? b) {
   if (identical(a, b)) {
     return true;
@@ -56,8 +60,9 @@ bool _deepEquals(Object? a, Object? b) {
   }
   if (a is List && b is List) {
     return a.length == b.length &&
-        a.indexed
-            .every(((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]));
+        a.indexed.every(
+          ((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]),
+        );
   }
   if (a is Map && b is Map) {
     if (a.length != b.length) {
@@ -106,19 +111,26 @@ int _deepHash(Object? value) {
   return value.hashCode;
 }
 
-
+/// Connection topology. Advertiser and discoverer must use the same strategy.
+///
+/// See https://developers.google.com/nearby/connections/strategies.
 enum NearbyStrategy {
+  /// M-to-N: every device can advertise, discover and hold several
+  /// connections. Lowest bandwidth; suits small payloads and mesh-like use
+  /// such as multiplayer games.
   cluster,
+
+  /// 1-to-N: one hub accepts many spokes, each device is a hub or a spoke
+  /// but not both. Higher bandwidth than [cluster].
   star,
-  pointToPoint;
+
+  /// 1-to-1: a single connection at a time. Highest bandwidth.
+  pointToPoint,
 }
 
+/// A nearby advertiser reported by [NearbyFlutterApi.onEndpointFound].
 class EndpointInfo {
-  EndpointInfo({
-    this.endpointId,
-    this.name,
-    this.serviceId,
-  });
+  EndpointInfo({this.endpointId, this.name, this.serviceId});
 
   String? endpointId;
 
@@ -127,15 +139,12 @@ class EndpointInfo {
   String? serviceId;
 
   List<Object?> _toList() {
-    return <Object?>[
-      endpointId,
-      name,
-      serviceId,
-    ];
+    return <Object?>[endpointId, name, serviceId];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static EndpointInfo decode(Object result) {
     result as List<Object?>;
@@ -155,7 +164,9 @@ class EndpointInfo {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(endpointId, other.endpointId) && _deepEquals(name, other.name) && _deepEquals(serviceId, other.serviceId);
+    return _deepEquals(endpointId, other.endpointId) &&
+        _deepEquals(name, other.name) &&
+        _deepEquals(serviceId, other.serviceId);
   }
 
   @override
@@ -168,29 +179,28 @@ class EndpointInfo {
   }
 }
 
+/// Details of a pending connection, given by
+/// [NearbyFlutterApi.onConnectionInitiated] on both sides.
 class ConnectionInfo {
-  ConnectionInfo({
-    this.endpointName,
-    this.authDigits,
-    this.isIncoming,
-  });
+  ConnectionInfo({this.endpointName, this.authDigits, this.isIncoming});
 
+  /// Name the remote device advertised or requested with.
   String? endpointName;
 
+  /// Short code to show on both devices so users can confirm they match
+  /// before accepting. Connections that skip this check are insecure.
   String? authDigits;
 
+  /// True when the remote device requested the connection.
   bool? isIncoming;
 
   List<Object?> _toList() {
-    return <Object?>[
-      endpointName,
-      authDigits,
-      isIncoming,
-    ];
+    return <Object?>[endpointName, authDigits, isIncoming];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static ConnectionInfo decode(Object result) {
     result as List<Object?>;
@@ -210,7 +220,9 @@ class ConnectionInfo {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(endpointName, other.endpointName) && _deepEquals(authDigits, other.authDigits) && _deepEquals(isIncoming, other.isIncoming);
+    return _deepEquals(endpointName, other.endpointName) &&
+        _deepEquals(authDigits, other.authDigits) &&
+        _deepEquals(isIncoming, other.isIncoming);
   }
 
   @override
@@ -223,14 +235,13 @@ class ConnectionInfo {
   }
 }
 
+/// Data received from a connected endpoint.
+///
 /// [type] mirrors Android `Payload.Type`: 1 = bytes, 2 = file, 3 = stream.
+/// [bytes] is set for bytes payloads, [filePath] for file payloads. A file is
+/// only complete once [TransferUpdate.status] reports success.
 class PayloadMessage {
-  PayloadMessage({
-    this.id,
-    this.type,
-    this.bytes,
-    this.filePath,
-  });
+  PayloadMessage({this.id, this.type, this.bytes, this.filePath});
 
   int? id;
 
@@ -241,16 +252,12 @@ class PayloadMessage {
   String? filePath;
 
   List<Object?> _toList() {
-    return <Object?>[
-      id,
-      type,
-      bytes,
-      filePath,
-    ];
+    return <Object?>[id, type, bytes, filePath];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static PayloadMessage decode(Object result) {
     result as List<Object?>;
@@ -271,7 +278,10 @@ class PayloadMessage {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(id, other.id) && _deepEquals(type, other.type) && _deepEquals(bytes, other.bytes) && _deepEquals(filePath, other.filePath);
+    return _deepEquals(id, other.id) &&
+        _deepEquals(type, other.type) &&
+        _deepEquals(bytes, other.bytes) &&
+        _deepEquals(filePath, other.filePath);
   }
 
   @override
@@ -284,6 +294,8 @@ class PayloadMessage {
   }
 }
 
+/// Progress of an incoming or outgoing payload.
+///
 /// [status] mirrors Android `PayloadTransferUpdate.Status`:
 /// 1 = success, 2 = failure, 3 = in progress, 4 = canceled.
 class TransferUpdate {
@@ -303,16 +315,12 @@ class TransferUpdate {
   int? totalBytes;
 
   List<Object?> _toList() {
-    return <Object?>[
-      payloadId,
-      status,
-      bytesTransferred,
-      totalBytes,
-    ];
+    return <Object?>[payloadId, status, bytesTransferred, totalBytes];
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static TransferUpdate decode(Object result) {
     result as List<Object?>;
@@ -333,7 +341,10 @@ class TransferUpdate {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(payloadId, other.payloadId) && _deepEquals(status, other.status) && _deepEquals(bytesTransferred, other.bytesTransferred) && _deepEquals(totalBytes, other.totalBytes);
+    return _deepEquals(payloadId, other.payloadId) &&
+        _deepEquals(status, other.status) &&
+        _deepEquals(bytesTransferred, other.bytesTransferred) &&
+        _deepEquals(totalBytes, other.totalBytes);
   }
 
   @override
@@ -346,7 +357,6 @@ class TransferUpdate {
   }
 }
 
-
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
   @override
@@ -354,19 +364,19 @@ class _PigeonCodec extends StandardMessageCodec {
     if (value is int) {
       buffer.putUint8(4);
       buffer.putInt64(value);
-    }    else if (value is NearbyStrategy) {
+    } else if (value is NearbyStrategy) {
       buffer.putUint8(129);
       writeValue(buffer, value.index);
-    }    else if (value is EndpointInfo) {
+    } else if (value is EndpointInfo) {
       buffer.putUint8(130);
       writeValue(buffer, value.encode());
-    }    else if (value is ConnectionInfo) {
+    } else if (value is ConnectionInfo) {
       buffer.putUint8(131);
       writeValue(buffer, value.encode());
-    }    else if (value is PayloadMessage) {
+    } else if (value is PayloadMessage) {
       buffer.putUint8(132);
       writeValue(buffer, value.encode());
-    }    else if (value is TransferUpdate) {
+    } else if (value is TransferUpdate) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
     } else {
@@ -399,158 +409,179 @@ class NearbyHostApi {
   /// available for dependency injection. If it is left null, the default
   /// BinaryMessenger will be used which routes to the host platform.
   NearbyHostApi({
-      BinaryMessenger? binaryMessenger, 
-      String messageChannelSuffix = '', 
-      })
-      : pigeonVar_binaryMessenger = binaryMessenger,
-        pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
+    BinaryMessenger? binaryMessenger,
+    String messageChannelSuffix = '',
+  }) : pigeonVar_binaryMessenger = binaryMessenger,
+       pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty
+           ? '.$messageChannelSuffix'
+           : '';
 
   final BinaryMessenger? pigeonVar_binaryMessenger;
   static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
 
   final String pigeonVar_messageChannelSuffix;
 
-
-  Future<void> startAdvertising(String name, String serviceId, NearbyStrategy strategy) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.startAdvertising$pigeonVar_messageChannelSuffix';
+  Future<void> startAdvertising(
+    String name,
+    String serviceId,
+    NearbyStrategy strategy,
+  ) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.startAdvertising$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[name, serviceId, strategy]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[name, serviceId, strategy],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 
   Future<void> startDiscovery(String serviceId, NearbyStrategy strategy) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.startDiscovery$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.startDiscovery$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[serviceId, strategy]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[serviceId, strategy],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 
   Future<void> requestConnection(String name, String endpointId) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.requestConnection$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.requestConnection$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[name, endpointId]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[name, endpointId],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 
   Future<void> acceptConnection(String endpointId) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.acceptConnection$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.acceptConnection$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[endpointId]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[endpointId],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 
   Future<void> rejectConnection(String endpointId) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.rejectConnection$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.rejectConnection$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[endpointId]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[endpointId],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 
   Future<int> sendBytes(List<String> endpointIds, Uint8List bytes) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.sendBytes$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.sendBytes$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[endpointIds, bytes]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[endpointIds, bytes],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as int;
   }
 
   Future<int> sendFile(List<String> endpointIds, String path) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.sendFile$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.sendFile$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[endpointIds, path]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[endpointIds, path],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: false,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
     return pigeonVar_replyValue! as int;
   }
 
   Future<void> cancelPayload(int payloadId) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.cancelPayload$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.cancelPayload$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[payloadId]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[payloadId],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 
   Future<void> stopAdvertising() async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopAdvertising$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopAdvertising$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -559,15 +590,15 @@ class NearbyHostApi {
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 
   Future<void> stopDiscovery() async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopDiscovery$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopDiscovery$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -576,32 +607,34 @@ class NearbyHostApi {
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 
   Future<void> disconnect(String endpointId) async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.disconnect$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.disconnect$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
       binaryMessenger: pigeonVar_binaryMessenger,
     );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[endpointId]);
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[endpointId],
+    );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 
   Future<void> stopAllEndpoints() async {
-    final pigeonVar_channelName = 'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopAllEndpoints$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopAllEndpoints$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -610,41 +643,58 @@ class NearbyHostApi {
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
     _extractReplyValueOrThrow(
-        pigeonVar_replyList,
-        pigeonVar_channelName,
-        isNullValid: true,
-    )
-    ;
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
   }
 }
 
+/// Events from Nearby Connections. Implement and register with
+/// `NativeNearbyConnections.setListener`.
 abstract class NearbyFlutterApi {
   static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
 
+  /// Discovery found an advertiser with the same service id.
   void onEndpointFound(EndpointInfo info);
 
+  /// A previously found advertiser is no longer reachable.
   void onEndpointLost(String endpointId);
 
+  /// A connection was requested, by either side. Both sides must call
+  /// `acceptConnection` (ideally after users compare [ConnectionInfo.authDigits])
+  /// or `rejectConnection`.
   void onConnectionInitiated(String endpointId, ConnectionInfo info);
 
+  /// Outcome of a connection request, using Android `ConnectionsStatusCodes`:
+  /// 0 = connected, 8004 = rejected by one or both sides, 13 = connection
+  /// broke before it was accepted.
   void onConnectionResult(String endpointId, int statusCode);
 
+  /// The connection ended. No more data can be sent or received.
   void onDisconnected(String endpointId);
 
+  /// A payload started arriving. Bytes payloads are complete here; wait for
+  /// [onPayloadTransferUpdate] success before reading a file payload.
   void onPayloadReceived(String endpointId, PayloadMessage payload);
 
+  /// Progress of a payload being sent or received.
   void onPayloadTransferUpdate(String endpointId, TransferUpdate update);
 
-  static void setUp(NearbyFlutterApi? api, {
+  static void setUp(
+    NearbyFlutterApi? api, {
     BinaryMessenger? binaryMessenger,
     String messageChannelSuffix = '',
-  }) 
-{
-    messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
+  }) {
+    messageChannelSuffix = messageChannelSuffix.isNotEmpty
+        ? '.$messageChannelSuffix'
+        : '';
     {
       final pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onEndpointFound$messageChannelSuffix', pigeonChannelCodec,
-          binaryMessenger: binaryMessenger);
+        'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onEndpointFound$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
@@ -656,16 +706,20 @@ abstract class NearbyFlutterApi {
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          }          catch (e) {
-            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
           }
         });
       }
     }
     {
       final pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onEndpointLost$messageChannelSuffix', pigeonChannelCodec,
-          binaryMessenger: binaryMessenger);
+        'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onEndpointLost$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
@@ -677,16 +731,20 @@ abstract class NearbyFlutterApi {
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          }          catch (e) {
-            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
           }
         });
       }
     }
     {
       final pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onConnectionInitiated$messageChannelSuffix', pigeonChannelCodec,
-          binaryMessenger: binaryMessenger);
+        'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onConnectionInitiated$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
@@ -699,16 +757,20 @@ abstract class NearbyFlutterApi {
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          }          catch (e) {
-            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
           }
         });
       }
     }
     {
       final pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onConnectionResult$messageChannelSuffix', pigeonChannelCodec,
-          binaryMessenger: binaryMessenger);
+        'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onConnectionResult$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
@@ -721,16 +783,20 @@ abstract class NearbyFlutterApi {
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          }          catch (e) {
-            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
           }
         });
       }
     }
     {
       final pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onDisconnected$messageChannelSuffix', pigeonChannelCodec,
-          binaryMessenger: binaryMessenger);
+        'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onDisconnected$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
@@ -742,16 +808,20 @@ abstract class NearbyFlutterApi {
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          }          catch (e) {
-            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
           }
         });
       }
     }
     {
       final pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onPayloadReceived$messageChannelSuffix', pigeonChannelCodec,
-          binaryMessenger: binaryMessenger);
+        'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onPayloadReceived$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
@@ -764,16 +834,20 @@ abstract class NearbyFlutterApi {
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          }          catch (e) {
-            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
           }
         });
       }
     }
     {
       final pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onPayloadTransferUpdate$messageChannelSuffix', pigeonChannelCodec,
-          binaryMessenger: binaryMessenger);
+        'dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onPayloadTransferUpdate$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
@@ -786,8 +860,10 @@ abstract class NearbyFlutterApi {
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          }          catch (e) {
-            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
           }
         });
       }
