@@ -3,21 +3,21 @@
 
 import Foundation
 
-#if os(iOS)
+#if canImport(Flutter)
   import Flutter
-#elseif os(macOS)
+#elseif canImport(FlutterMacOS)
   import FlutterMacOS
-#else
-  #error("Unsupported platform.")
 #endif
 
 /// Error class for passing custom error details to Dart side.
-final class PigeonError: Error {
-  let code: String
-  let message: String?
-  let details: Sendable?
+@objc final class PigeonError: NSObject, Error {
+  @objc var code: String?
+  @objc var message: String?
+  @objc var details: String?
 
-  init(code: String, message: String?, details: Sendable?) {
+  @objc override init() {}
+
+  @objc init(code: String?, message: String?, details: String?) {
     self.code = code
     self.message = message
     self.details = details
@@ -25,41 +25,171 @@ final class PigeonError: Error {
 
   var localizedDescription: String {
     return
-      "PigeonError(code: \(code), message: \(message ?? "<nil>"), details: \(details ?? "<nil>"))"
+      "PigeonError(code: \(code ?? "<nil>"), message: \(message ?? "<nil>"), details: \(details ?? "<nil>"))"
   }
-}
-
-private func wrapResult(_ result: Any?) -> [Any?] {
-  return [result]
-}
-
-private func wrapError(_ error: Any) -> [Any?] {
-  if let pigeonError = error as? PigeonError {
-    return [
-      pigeonError.code,
-      pigeonError.message,
-      pigeonError.details,
-    ]
-  }
-  if let flutterError = error as? FlutterError {
-    return [
-      flutterError.code,
-      flutterError.message,
-      flutterError.details,
-    ]
-  }
-  return [
-    "\(error)",
-    "\(Swift.type(of: error))",
-    "Stacktrace: \(Thread.callStackSymbols)",
-  ]
 }
 
 private func createConnectionError(withChannelName channelName: String) -> PigeonError {
   return PigeonError(code: "channel-error", message: "Unable to establish connection on channel: '\(channelName)'.", details: "")
 }
 
+// A wrapper around NSNumber that preserves the original primitive/enum type across FFI.
+@objc class MessagesNumberWrapper: NSObject, NSCopying {
+  @objc required init(
+    number: NSNumber,
+    type: Int,
+  )  {
+    self.number = number
+    self.type = type
+  }
+  func copy(with zone: NSZone? = nil) -> Any {
+    return Self(number: number, type: type)
+  }
+  @objc var number: NSNumber
+  @objc var type: Int
+  static func == (lhs: MessagesNumberWrapper, rhs: MessagesNumberWrapper) -> Bool {
+    return lhs.number == rhs.number && lhs.type == rhs.type
+  }
+
+  override func isEqual(_ object: Any?) -> Bool {
+    guard let other = object as? MessagesNumberWrapper else {
+      return false
+    }
+    return self == other
+  }
+
+  override var hash: Int {
+    return number.hashValue ^ type.hashValue
+  }
+
+}
+
+private func wrapNumber(number: Any) -> MessagesNumberWrapper {
+  if let nsNumber = number as? NSNumber {
+    if CFGetTypeID(nsNumber as CFTypeRef) == CFBooleanGetTypeID() {
+      return MessagesNumberWrapper(number: nsNumber, type: 3)
+    }
+    if CFNumberIsFloatType(nsNumber) {
+      return MessagesNumberWrapper(number: nsNumber, type: 2)
+    }
+    return MessagesNumberWrapper(number: nsNumber, type: 1)
+  }
+
+  switch number {
+    case let value as NearbyStrategy:
+      return MessagesNumberWrapper(number: NSNumber(value: value.rawValue), type: 4)
+    default:
+      return MessagesNumberWrapper(number: NSNumber(value: 0), type: 0)
+  }
+}
+
+private func unwrapNumber(wrappedNumber: MessagesNumberWrapper) -> Any {
+  switch wrappedNumber.type {
+    case 1:
+      return wrappedNumber.number.int64Value
+    case 2:
+      return wrappedNumber.number.doubleValue
+    case 3:
+      return wrappedNumber.number.boolValue
+    case 4:
+      return NearbyStrategy(rawValue: wrappedNumber.number.intValue)!
+    default:
+      return wrappedNumber.number.int64Value
+  }
+}
+// Enum to represent the Dart TypedData types
+enum MessagesPigeonInternalNumberType: Int {
+  case uint8 = 0
+  case int32 = 1
+  case int64 = 2
+  case float32 = 3
+  case float64 = 4
+}
+
+@objc public class MessagesPigeonTypedData: NSObject {
+  @objc public let data: NSData
+  @objc public let type: Int
+
+  @objc public init(data: NSData, type: Int) {
+    self.data = data
+    self.type = type
+  }
+
+  public init(_ data: [UInt8]) {
+    self.data = NSData(bytes: data, length: data.count)
+    self.type = MessagesPigeonInternalNumberType.uint8.rawValue
+  }
+
+  public init(_ data: [Int32]) {
+    self.data = NSData(bytes: data, length: data.count * MemoryLayout<Int32>.size)
+    self.type = MessagesPigeonInternalNumberType.int32.rawValue
+  }
+
+  public init(_ data: [Int64]) {
+    self.data = NSData(bytes: data, length: data.count * MemoryLayout<Int64>.size)
+    self.type = MessagesPigeonInternalNumberType.int64.rawValue
+  }
+
+  public init(_ data: [Float32]) {
+    self.data = NSData(bytes: data, length: data.count * MemoryLayout<Float32>.size)
+    self.type = MessagesPigeonInternalNumberType.float32.rawValue
+  }
+
+  public init(_ data: [Float64]) {
+    self.data = NSData(bytes: data, length: data.count * MemoryLayout<Float64>.size)
+    self.type = MessagesPigeonInternalNumberType.float64.rawValue
+  }
+
+  /// Returns the data as a [UInt8] array, if the type is .uint8
+  public func toUint8Array() -> [UInt8]? {
+    guard type == MessagesPigeonInternalNumberType.uint8.rawValue else { return nil }
+    return [UInt8](data as Data)
+  }
+
+  /// Returns the data as a [Int32] array, if the type is .int32
+  public func toInt32Array() -> [Int32]? {
+    guard type == MessagesPigeonInternalNumberType.int32.rawValue else { return nil }
+    guard data.length % MemoryLayout<Int32>.size == 0 else { return nil }
+    let count = data.length / MemoryLayout<Int32>.size
+    var array = [Int32](repeating: 0, count: count)
+    data.getBytes(&array, length: data.length)
+    return array
+  }
+
+  /// Returns the data as a [Int64] array, if the type is .int64
+  public func toInt64Array() -> [Int64]? {
+    guard type == MessagesPigeonInternalNumberType.int64.rawValue else { return nil }
+    guard data.length % MemoryLayout<Int64>.size == 0 else { return nil }
+    let count = data.length / MemoryLayout<Int64>.size
+    var array = [Int64](repeating: 0, count: count)
+    data.getBytes(&array, length: data.length)
+    return array
+  }
+
+  /// Returns the data as a [Float32] array, if the type is .float32
+  public func toFloat32Array() -> [Float32]? {
+    guard type == MessagesPigeonInternalNumberType.float32.rawValue else { return nil }
+    guard data.length % MemoryLayout<Float32>.size == 0 else { return nil }
+    let count = data.length / MemoryLayout<Float32>.size
+    var array = [Float32](repeating: 0, count: count)
+    data.getBytes(&array, length: data.length)
+    return array
+  }
+
+  /// Returns the data as a [Float64] array (Array<Double>), if the type is .float64
+  public func toFloat64Array() -> [Double]? {
+    guard type == MessagesPigeonInternalNumberType.float64.rawValue else { return nil }
+    guard data.length % MemoryLayout<Double>.size == 0 else { return nil }
+    let count = data.length / MemoryLayout<Double>.size
+    var array = [Double](repeating: 0, count: count)
+    data.getBytes(&array, length: data.length)
+    return array
+  }
+}
+
+
 enum MessagesPigeonInternal {
+  static let defaultInstanceName = "PigeonDefaultClassName32uh4ui3lh445uh4h3l2l455g4y34u"
   static func isNullish(_ value: Any?) -> Bool {
     guard let innerValue = value else {
       return true
@@ -69,7 +199,7 @@ enum MessagesPigeonInternal {
       return true
     }
 
-    return innerValue is NSNull
+    return innerValue is NSNull || innerValue is MessagesPigeonInternalNull
   }
   static func doubleEquals(_ lhs: Double, _ rhs: Double) -> Bool {
     return (lhs.isNaN && rhs.isNaN) || lhs == rhs
@@ -188,10 +318,70 @@ private func nilOrValue<T>(_ value: Any?) -> T? {
 }
 
 
+/// Computes the keys that associate Native Interop registrations with a Flutter engine.
+///
+/// `Int64.min` means "no key". Exact keys match Dart's `PlatformDispatcher.instance.engineId`.
+/// When an exact key is unavailable, each engine messenger is assigned a negative synthetic key.
+fileprivate enum PigeonEngineKeys {
+  /// The sentinel for an unknown engine.
+  static let noKey: Int64 = Int64.min
+  /// Guards the key caches. Recursive because `key(for:)` calls `key(messenger:)`.
+  private static let lock = NSRecursiveLock()
+  private static let syntheticKeys = NSMapTable<AnyObject, NSNumber>.weakToStrongObjects()
+  private static var nextSyntheticKey: Int64 = -1
+
+  /// Returns the key previously assigned to `messenger`, or assigns and returns a new synthetic
+  /// key for `messenger`.
+  static func key(messenger: AnyObject) -> Int64 {
+    lock.lock()
+    defer { lock.unlock() }
+    if let existing = syntheticKeys.object(forKey: messenger) {
+      return existing.int64Value
+    }
+    let key = nextSyntheticKey
+    nextSyntheticKey -= 1
+    syntheticKeys.setObject(NSNumber(value: key), forKey: messenger)
+    return key
+  }
+
+  #if canImport(Flutter) || canImport(FlutterMacOS)
+    /// Keys already computed for each registrar, so `unregister` during engine teardown reuses the
+    /// key from registration even after the registrar's engine and messenger are gone.
+    private static let registrarKeys = NSMapTable<AnyObject, NSNumber>.weakToStrongObjects()
+
+    /// Returns the key for the engine that owns `registrar`, or `noKey` if it can't be determined.
+    static func key(for registrar: FlutterPluginRegistrar) -> Int64 {
+      let registrarObject = registrar as AnyObject
+      lock.lock()
+      defer { lock.unlock() }
+      if let cached = registrarKeys.object(forKey: registrarObject) {
+        return cached.int64Value
+      }
+      var resolved = noKey
+      if registrarObject.responds(to: NSSelectorFromString("engineIdentifier")),
+        let identifier = registrarObject.value(forKey: "engineIdentifier") as? NSNumber,
+        identifier.int64Value != 0
+      {
+        // Real engine identifiers are never 0. 0 comes from a registrar whose engine is already
+        // deallocating, or from a test double, and must not be shared between engines.
+        resolved = identifier.int64Value
+      } else if let messenger = registrarObject.value(forKey: "messenger") as AnyObject? {
+        // Read through KVC because the messenger can be nil while the engine is deallocating,
+        // even though it is declared non-null.
+        resolved = key(messenger: messenger)
+      }
+      if resolved != noKey {
+        registrarKeys.setObject(NSNumber(value: resolved), forKey: registrarObject)
+      }
+      return resolved
+    }
+  #endif
+}
+
 /// Connection topology. Advertiser and discoverer must use the same strategy.
 ///
 /// See https://developers.google.com/nearby/connections/strategies.
-enum NearbyStrategy: Int, CaseIterable {
+@objc enum NearbyStrategy: Int, CaseIterable {
   /// M-to-N: every device can advertise, discover and hold several
   /// connections. Lowest bandwidth; suits small payloads and mesh-like use
   /// such as multiplayer games.
@@ -250,6 +440,43 @@ struct EndpointInfo: Hashable, CustomStringConvertible {
   }
 }
 
+/// A nearby advertiser reported by [NearbyFlutterApi.onEndpointFound].
+///
+/// Generated bridge class from Pigeon that moves data from Swift to Objective-C.
+@objc class EndpointInfoBridge: NSObject {
+  @objc init(
+    endpointId: NSString? = nil,
+    name: NSString? = nil,
+    serviceId: NSString? = nil
+  ) {
+    self.endpointId = endpointId
+    self.name = name
+    self.serviceId = serviceId
+  }
+  @objc var endpointId: NSString? = nil
+  @objc var name: NSString? = nil
+  @objc var serviceId: NSString? = nil
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromSwift(_ pigeonVar_Class: EndpointInfo?) -> EndpointInfoBridge? {
+    if (MessagesPigeonInternal.isNullish(pigeonVar_Class)) {
+      return nil
+    }
+    return EndpointInfoBridge(
+      endpointId: pigeonVar_Class!.endpointId as NSString?,
+      name: pigeonVar_Class!.name as NSString?,
+      serviceId: pigeonVar_Class!.serviceId as NSString?,
+    )
+  }
+  func toSwift() -> EndpointInfo {
+    return EndpointInfo (
+      endpointId: endpointId as String?,
+      name: name as String?,
+      serviceId: serviceId as String?,
+    )
+  }
+}
+
 /// Details of a pending connection, given by
 /// [NearbyFlutterApi.onConnectionInitiated] on both sides.
 ///
@@ -302,6 +529,48 @@ struct ConnectionInfo: Hashable, CustomStringConvertible {
   }
 }
 
+/// Details of a pending connection, given by
+/// [NearbyFlutterApi.onConnectionInitiated] on both sides.
+///
+/// Generated bridge class from Pigeon that moves data from Swift to Objective-C.
+@objc class ConnectionInfoBridge: NSObject {
+  @objc init(
+    endpointName: NSString? = nil,
+    authDigits: NSString? = nil,
+    isIncoming: NSNumber? = nil
+  ) {
+    self.endpointName = endpointName
+    self.authDigits = authDigits
+    self.isIncoming = isIncoming
+  }
+  /// Name the remote device advertised or requested with.
+  @objc var endpointName: NSString? = nil
+  /// Short code to show on both devices so users can confirm they match
+  /// before accepting. Connections that skip this check are insecure.
+  @objc var authDigits: NSString? = nil
+  /// True when the remote device requested the connection.
+  @objc var isIncoming: NSNumber? = nil
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromSwift(_ pigeonVar_Class: ConnectionInfo?) -> ConnectionInfoBridge? {
+    if (MessagesPigeonInternal.isNullish(pigeonVar_Class)) {
+      return nil
+    }
+    return ConnectionInfoBridge(
+      endpointName: pigeonVar_Class!.endpointName as NSString?,
+      authDigits: pigeonVar_Class!.authDigits as NSString?,
+      isIncoming: MessagesPigeonInternal.isNullish(pigeonVar_Class!.isIncoming) ? nil : NSNumber(value: pigeonVar_Class!.isIncoming!),
+    )
+  }
+  func toSwift() -> ConnectionInfo {
+    return ConnectionInfo (
+      endpointName: endpointName as String?,
+      authDigits: authDigits as String?,
+      isIncoming: MessagesPigeonInternal.isNullish(isIncoming) ? nil : isIncoming!.boolValue,
+    )
+  }
+}
+
 /// Data received from a connected endpoint.
 ///
 /// [type] mirrors Android `Payload.Type`: 1 = bytes, 2 = file, 3 = stream.
@@ -312,7 +581,7 @@ struct ConnectionInfo: Hashable, CustomStringConvertible {
 struct PayloadMessage: Hashable, CustomStringConvertible {
   var id: Int64? = nil
   var type: Int64? = nil
-  var bytes: FlutterStandardTypedData? = nil
+  var bytes: [UInt8]? = nil
   var filePath: String? = nil
 
 
@@ -320,7 +589,7 @@ struct PayloadMessage: Hashable, CustomStringConvertible {
   static func fromList(_ pigeonVar_list: [Any?]) -> PayloadMessage? {
     let id: Int64? = nilOrValue(pigeonVar_list[0])
     let type: Int64? = nilOrValue(pigeonVar_list[1])
-    let bytes: FlutterStandardTypedData? = nilOrValue(pigeonVar_list[2])
+    let bytes: [UInt8]? = nilOrValue(pigeonVar_list[2])
     let filePath: String? = nilOrValue(pigeonVar_list[3])
 
     return PayloadMessage(
@@ -355,6 +624,52 @@ struct PayloadMessage: Hashable, CustomStringConvertible {
 
   public var description: String {
     return "PayloadMessage(id: \(String(describing: id)), type: \(String(describing: type)), bytes: \(String(describing: bytes)), filePath: \(String(describing: filePath)))"
+  }
+}
+
+/// Data received from a connected endpoint.
+///
+/// [type] mirrors Android `Payload.Type`: 1 = bytes, 2 = file, 3 = stream.
+/// [bytes] is set for bytes payloads, [filePath] for file payloads. A file is
+/// only complete once [TransferUpdate.status] reports success.
+///
+/// Generated bridge class from Pigeon that moves data from Swift to Objective-C.
+@objc class PayloadMessageBridge: NSObject {
+  @objc init(
+    id: NSNumber? = nil,
+    type: NSNumber? = nil,
+    bytes: MessagesPigeonTypedData? = nil,
+    filePath: NSString? = nil
+  ) {
+    self.id = id
+    self.type = type
+    self.bytes = bytes
+    self.filePath = filePath
+  }
+  @objc var id: NSNumber? = nil
+  @objc var type: NSNumber? = nil
+  @objc var bytes: MessagesPigeonTypedData? = nil
+  @objc var filePath: NSString? = nil
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromSwift(_ pigeonVar_Class: PayloadMessage?) -> PayloadMessageBridge? {
+    if (MessagesPigeonInternal.isNullish(pigeonVar_Class)) {
+      return nil
+    }
+    return PayloadMessageBridge(
+      id: MessagesPigeonInternal.isNullish(pigeonVar_Class!.id) ? nil : NSNumber(value: pigeonVar_Class!.id!),
+      type: MessagesPigeonInternal.isNullish(pigeonVar_Class!.type) ? nil : NSNumber(value: pigeonVar_Class!.type!),
+      bytes: MessagesPigeonInternal.isNullish(pigeonVar_Class!.bytes) ? nil : MessagesPigeonTypedData(pigeonVar_Class!.bytes!),
+      filePath: pigeonVar_Class!.filePath as NSString?,
+    )
+  }
+  func toSwift() -> PayloadMessage {
+    return PayloadMessage (
+      id: MessagesPigeonInternal.isNullish(id) ? nil : id!.int64Value,
+      type: MessagesPigeonInternal.isNullish(type) ? nil : type!.int64Value,
+      bytes: MessagesPigeonInternal.isNullish(bytes) ? nil : bytes!.toUint8Array(),
+      filePath: filePath as String?,
+    )
   }
 }
 
@@ -413,75 +728,943 @@ struct TransferUpdate: Hashable, CustomStringConvertible {
   }
 }
 
-private class MessagesPigeonCodecReader: FlutterStandardReader {
-  override func readValue(ofType type: UInt8) -> Any? {
+/// Progress of an incoming or outgoing payload.
+///
+/// [status] mirrors Android `PayloadTransferUpdate.Status`:
+/// 1 = success, 2 = failure, 3 = in progress, 4 = canceled.
+///
+/// Generated bridge class from Pigeon that moves data from Swift to Objective-C.
+@objc class TransferUpdateBridge: NSObject {
+  @objc init(
+    payloadId: NSNumber? = nil,
+    status: NSNumber? = nil,
+    bytesTransferred: NSNumber? = nil,
+    totalBytes: NSNumber? = nil
+  ) {
+    self.payloadId = payloadId
+    self.status = status
+    self.bytesTransferred = bytesTransferred
+    self.totalBytes = totalBytes
+  }
+  @objc var payloadId: NSNumber? = nil
+  @objc var status: NSNumber? = nil
+  @objc var bytesTransferred: NSNumber? = nil
+  @objc var totalBytes: NSNumber? = nil
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromSwift(_ pigeonVar_Class: TransferUpdate?) -> TransferUpdateBridge? {
+    if (MessagesPigeonInternal.isNullish(pigeonVar_Class)) {
+      return nil
+    }
+    return TransferUpdateBridge(
+      payloadId: MessagesPigeonInternal.isNullish(pigeonVar_Class!.payloadId) ? nil : NSNumber(value: pigeonVar_Class!.payloadId!),
+      status: MessagesPigeonInternal.isNullish(pigeonVar_Class!.status) ? nil : NSNumber(value: pigeonVar_Class!.status!),
+      bytesTransferred: MessagesPigeonInternal.isNullish(pigeonVar_Class!.bytesTransferred) ? nil : NSNumber(value: pigeonVar_Class!.bytesTransferred!),
+      totalBytes: MessagesPigeonInternal.isNullish(pigeonVar_Class!.totalBytes) ? nil : NSNumber(value: pigeonVar_Class!.totalBytes!),
+    )
+  }
+  func toSwift() -> TransferUpdate {
+    return TransferUpdate (
+      payloadId: MessagesPigeonInternal.isNullish(payloadId) ? nil : payloadId!.int64Value,
+      status: MessagesPigeonInternal.isNullish(status) ? nil : status!.int64Value,
+      bytesTransferred: MessagesPigeonInternal.isNullish(bytesTransferred) ? nil : bytesTransferred!.int64Value,
+      totalBytes: MessagesPigeonInternal.isNullish(totalBytes) ? nil : totalBytes!.int64Value,
+    )
+  }
+}
+
+@objc class MessagesPigeonInternalNull: NSObject {}
+
+private class _PigeonFfiCodec {
+  static func readValue(value: NSObject?, type: String? = nil, type2: String? = nil) -> Any? {
+    if (MessagesPigeonInternal.isNullish(value)) {
+      return nil
+    }
+    if let typedData = value as? MessagesPigeonTypedData {
+      switch typedData.type {
+      case MessagesPigeonInternalNumberType.uint8.rawValue:
+        return typedData.toUint8Array()
+      case MessagesPigeonInternalNumberType.int32.rawValue:
+        return typedData.toInt32Array()
+      case MessagesPigeonInternalNumberType.int64.rawValue:
+        return typedData.toInt64Array()
+      case MessagesPigeonInternalNumberType.float32.rawValue:
+        return typedData.toFloat32Array()
+      case MessagesPigeonInternalNumberType.float64.rawValue:
+        return typedData.toFloat64Array()
+      default:
+        return typedData
+      }
+    }
+    if value is NSNumber {
+      let number = value as! NSNumber
+      if type == "int" || type == "int64" {
+        return number.int64Value
+      } else if type == "double" {
+        return number.doubleValue
+      } else if type == "bool" {
+        return number.boolValue
+      }
+             else if (type == "NearbyStrategy") {
+        return NearbyStrategy.init(rawValue: number.intValue)
+      }
+
+      return number.int64Value
+    }
+    if (value is NSMutableArray || value is NSArray) {
+      var res: Array<Any?> = []
+      for item in (value as! NSArray) {
+          res.append(readValue(value: item as? NSObject, type: type))
+      }
+      return res
+    }
+    if (value is NSDictionary) {
+      var res: Dictionary<AnyHashable?, Any?> = Dictionary()
+      for (key, value) in (value as! NSDictionary) {
+          res[readValue(value: key as? NSObject, type: type) as? AnyHashable] = readValue(value: value as? NSObject, type: type2)
+      }
+      return res
+    }
+    if (value is MessagesNumberWrapper) {
+      return unwrapNumber(wrappedNumber: value as! MessagesNumberWrapper)
+    }
+    if (value is NSString) {
+      return value as! NSString
+          } else if (value is EndpointInfoBridge) {
+        return (value! as! EndpointInfoBridge).toSwift();
+              } else if (value is ConnectionInfoBridge) {
+        return (value! as! ConnectionInfoBridge).toSwift();
+              } else if (value is PayloadMessageBridge) {
+        return (value! as! PayloadMessageBridge).toSwift();
+              } else if (value is TransferUpdateBridge) {
+        return (value! as! TransferUpdateBridge).toSwift();
+
+    }
+    return value
+  }
+
+  static func writeValue(value: Any?, isObject: Bool = false) -> Any? {
+    if (MessagesPigeonInternal.isNullish(value)) {
+      return MessagesPigeonInternalNull()
+    }
+    if let uint8Array = value as? [UInt8] {
+      return isObject ? MessagesPigeonTypedData(uint8Array) : uint8Array as NSArray
+    }
+    if let int32Array = value as? [Int32] {
+      return isObject ? MessagesPigeonTypedData(int32Array) : int32Array as NSArray
+    }
+    if let int64Array = value as? [Int64] {
+      return isObject ? MessagesPigeonTypedData(int64Array) : int64Array as NSArray
+    }
+    if let float32Array = value as? [Float32] {
+      return isObject ? MessagesPigeonTypedData(float32Array) : float32Array as NSArray
+    }
+    if let float64Array = value as? [Double] {
+      return isObject ? MessagesPigeonTypedData(float64Array) : float64Array as NSArray
+    }
+    if (value is Bool || value is Double || value is Int || value is Int64 || value is NearbyStrategy) {
+      if (isObject) {
+        return wrapNumber(number: value!)
+      }
+      if (value is Bool) {
+        return value
+      } else if (value is Double) {
+        return value
+      } else if (value is Int || value is Int64) {
+        return value
+      }
+            else if (value is NearbyStrategy) {
+        return (value as! NearbyStrategy).rawValue
+      }
+    }
+    if (value is [Any]) {
+      let list = value as! [Any]
+      let res: NSMutableArray = NSMutableArray(capacity: list.count)
+      for item in list {
+        res.add(MessagesPigeonInternal.isNullish(item) ? MessagesPigeonInternalNull() : writeValue(value: item, isObject: true) as! NSObject)
+      }
+      return res
+    }
+    if (value is [AnyHashable: Any]) {
+      let dict = value as! [AnyHashable: Any]
+      let res: NSMutableDictionary = NSMutableDictionary(capacity: dict.count)
+      for (key, value) in dict {
+         res.setObject(MessagesPigeonInternal.isNullish(value) ? MessagesPigeonInternalNull() : writeValue(value: value, isObject: true) as! NSObject, forKey: writeValue(value: key, isObject: true) as! NSCopying)
+      }
+      return res
+    }
+    if (value is String) {
+      return value as! NSString
+          } else if (value is EndpointInfo) {
+        return EndpointInfoBridge.fromSwift(value as? EndpointInfo);
+              } else if (value is ConnectionInfo) {
+        return ConnectionInfoBridge.fromSwift(value as? ConnectionInfo);
+              } else if (value is PayloadMessage) {
+        return PayloadMessageBridge.fromSwift(value as? PayloadMessage);
+              } else if (value is TransferUpdate) {
+        return TransferUpdateBridge.fromSwift(value as? TransferUpdate);
+
+    }
+    return value
+  }
+}
+
+
+/// Writes values in the format of Flutter's standard message codec.
+///
+/// Implemented against Foundation rather than `FlutterStandardWriter` so that
+/// swiftgen can compile this file without importing Flutter.
+private struct MessagesPigeonInteropWriter {
+  private(set) var bytes: [UInt8] = []
+
+  mutating func writeByte(_ byte: UInt8) {
+    bytes.append(byte)
+  }
+
+  mutating func writeRaw<T: FixedWidthInteger>(_ value: T) {
+    withUnsafeBytes(of: value.littleEndian) { bytes.append(contentsOf: $0) }
+  }
+
+  mutating func writeSize(_ size: Int) {
+    if size < Int(MessagesPigeonInteropCodec.sizeUInt16) {
+      writeByte(UInt8(size))
+    } else if size <= Int(UInt16.max) {
+      writeByte(MessagesPigeonInteropCodec.sizeUInt16)
+      writeRaw(UInt16(size))
+    } else {
+      writeByte(MessagesPigeonInteropCodec.sizeUInt32)
+      writeRaw(UInt32(size))
+    }
+  }
+
+  mutating func writeAlignment(_ alignment: Int) {
+    let mod = bytes.count % alignment
+    if mod != 0 {
+      bytes.append(contentsOf: repeatElement(0, count: alignment - mod))
+    }
+  }
+
+  mutating func writeTypedData<T>(_ type: UInt8, _ array: [T], alignment: Int) {
+    writeByte(type)
+    writeSize(array.count)
+    writeAlignment(alignment)
+    array.withUnsafeBytes { bytes.append(contentsOf: $0) }
+  }
+
+  mutating func writeTypedData<T>(_ type: UInt8, _ array: [T]?, alignment: Int) {
+    guard let array = array else {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+      return
+    }
+    writeTypedData(type, array, alignment: alignment)
+  }
+
+  mutating func writeString(_ string: String) {
+    writeByte(MessagesPigeonInteropCodec.typeString)
+    var string = string
+    string.withUTF8 { utf8 in
+      writeSize(utf8.count)
+      bytes.append(contentsOf: utf8)
+    }
+  }
+
+  mutating func writeData(_ data: Foundation.Data) {
+    writeByte(MessagesPigeonInteropCodec.typeUint8List)
+    writeSize(data.count)
+    bytes.append(contentsOf: data)
+  }
+
+  mutating func writeValue(_ value: Any?) {
+    guard let value = value else {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+      return
+    }
+    // The most common types are matched by exact type first, because
+    // comparing metatypes is much cheaper than dynamic casts.
+    let valueType = Swift.type(of: value)
+    if valueType == String.self {
+      writeString(value as! String)
+      return
+    }
+    if valueType == Int64.self {
+      writeByte(MessagesPigeonInteropCodec.typeInt64)
+      writeRaw(value as! Int64)
+      return
+    }
+    if valueType == Bool.self {
+      writeByte((value as! Bool) ? MessagesPigeonInteropCodec.typeTrue : MessagesPigeonInteropCodec.typeFalse)
+      return
+    }
+    if valueType == Double.self {
+      writeByte(MessagesPigeonInteropCodec.typeFloat64)
+      writeAlignment(8)
+      writeRaw((value as! Double).bitPattern)
+      return
+    }
+    if valueType == [Any?].self {
+      writeList(value as! [Any?])
+      return
+    }
+    if writeCustomValue(value, type: valueType) {
+      return
+    }
+    // Typed data is matched by exact type, because casting an empty array of
+    // any element type to an array of numbers succeeds.
+    if valueType == [UInt8].self {
+      writeTypedData(MessagesPigeonInteropCodec.typeUint8List, value as! [UInt8], alignment: 1)
+      return
+    }
+    if valueType == [Int32].self {
+      writeTypedData(MessagesPigeonInteropCodec.typeInt32List, value as! [Int32], alignment: 4)
+      return
+    }
+    if valueType == [Int64].self {
+      writeTypedData(MessagesPigeonInteropCodec.typeInt64List, value as! [Int64], alignment: 8)
+      return
+    }
+    if valueType == [Float64].self {
+      writeTypedData(MessagesPigeonInteropCodec.typeFloat64List, value as! [Float64], alignment: 8)
+      return
+    }
+    if valueType == [Float32].self {
+      writeTypedData(MessagesPigeonInteropCodec.typeFloat32List, value as! [Float32], alignment: 4)
+      return
+    }
+    if valueType == AnyHashable.self {
+      writeValue((value as! AnyHashable).base)
+      return
+    }
+    if valueType == Foundation.Data.self {
+      writeData(value as! Foundation.Data)
+      return
+    }
+    // Collections are matched by protocol before any cast to a class, such as
+    // `NSNumber`, because those casts can bridge a whole Swift collection to
+    // Objective-C just to fail.
+    if let list = value as? MessagesPigeonInteropList {
+      list.pigeonWrite(to: &self)
+      return
+    }
+    if let map = value as? MessagesPigeonInteropMap {
+      map.pigeonWrite(to: &self)
+      return
+    }
+    if let optional = value as? MessagesPigeonInteropOptional {
+      writeValue(optional.pigeonWrapped)
+      return
+    }
+    if MessagesPigeonInternal.isNullish(value) {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+      return
+    }
+    if let number = value as? NSNumber {
+      if CFGetTypeID(number) == CFBooleanGetTypeID() {
+        writeByte(number.boolValue ? MessagesPigeonInteropCodec.typeTrue : MessagesPigeonInteropCodec.typeFalse)
+      } else if CFNumberIsFloatType(number) {
+        writeByte(MessagesPigeonInteropCodec.typeFloat64)
+        writeAlignment(8)
+        writeRaw(number.doubleValue.bitPattern)
+      } else {
+        writeByte(MessagesPigeonInteropCodec.typeInt64)
+        writeRaw(number.int64Value)
+      }
+      return
+    }
+    if let string = value as? String {
+      writeString(string)
+      return
+    }
+    if let data = value as? Foundation.Data {
+      writeData(data)
+      return
+    }
+    if let array = value as? NSArray {
+      writeByte(MessagesPigeonInteropCodec.typeList)
+      writeSize(array.count)
+      for item in array {
+        writeValue(item)
+      }
+      return
+    }
+    if let dictionary = value as? NSDictionary {
+      writeByte(MessagesPigeonInteropCodec.typeMap)
+      writeSize(dictionary.count)
+      for (key, item) in dictionary {
+        writeValue(key)
+        writeValue(item)
+      }
+      return
+    }
+    if writeCustomValueFallback(value) {
+      return
+    }
+    preconditionFailure("Unsupported value: \(value) of type \(valueType)")
+  }
+
+  mutating func writeList(_ list: [Any?]) {
+    writeByte(MessagesPigeonInteropCodec.typeList)
+    writeSize(list.count)
+    for item in list {
+      writeValue(item)
+    }
+  }
+
+  mutating func writeList<T>(_ list: [T]?) {
+    guard let list = list else {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+      return
+    }
+    writeByte(MessagesPigeonInteropCodec.typeList)
+    writeSize(list.count)
+    for item in list {
+      writeValue(item)
+    }
+  }
+
+  mutating func writeList<T>(_ list: [T?]?) {
+    guard let list = list else {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+      return
+    }
+    writeByte(MessagesPigeonInteropCodec.typeList)
+    writeSize(list.count)
+    for item in list {
+      writeOptional(item)
+    }
+  }
+
+  mutating func writeList<T>(_ list: [T]?, _ writeElement: (inout Self, T) -> Void) {
+    guard let list = list else {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+      return
+    }
+    writeByte(MessagesPigeonInteropCodec.typeList)
+    writeSize(list.count)
+    for item in list {
+      writeElement(&self, item)
+    }
+  }
+
+  mutating func writeOptional<T>(_ value: T?) {
+    if let value = value {
+      writeValue(value)
+    } else {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+    }
+  }
+
+  mutating func writeMap<K, V>(_ map: [K: V]?) {
+    guard let map = map else {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+      return
+    }
+    writeByte(MessagesPigeonInteropCodec.typeMap)
+    writeSize(map.count)
+    for (key, item) in map {
+      writeValue(key)
+      writeValue(item)
+    }
+  }
+
+  mutating func writeMap<K, V>(_ map: [K?: V]?) {
+    guard let map = map else {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+      return
+    }
+    writeByte(MessagesPigeonInteropCodec.typeMap)
+    writeSize(map.count)
+    for (key, item) in map {
+      writeOptional(key)
+      writeValue(item)
+    }
+  }
+
+  mutating func writeMap<K, V>(_ map: [K: V?]?) {
+    guard let map = map else {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+      return
+    }
+    writeByte(MessagesPigeonInteropCodec.typeMap)
+    writeSize(map.count)
+    for (key, item) in map {
+      writeValue(key)
+      writeOptional(item)
+    }
+  }
+
+  mutating func writeMap<K, V>(_ map: [K?: V?]?) {
+    guard let map = map else {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+      return
+    }
+    writeByte(MessagesPigeonInteropCodec.typeMap)
+    writeSize(map.count)
+    for (key, item) in map {
+      writeOptional(key)
+      writeOptional(item)
+    }
+  }
+
+  mutating func writeMap<K, V>(_ map: [K: V]?, _ writeEntry: (inout Self, K, V) -> Void) {
+    guard let map = map else {
+      writeByte(MessagesPigeonInteropCodec.typeNull)
+      return
+    }
+    writeByte(MessagesPigeonInteropCodec.typeMap)
+    writeSize(map.count)
+    for (key, item) in map {
+      writeEntry(&self, key, item)
+    }
+  }
+
+
+  mutating func writeEndpointInfo(_ value: EndpointInfo) {
+    writeByte(MessagesPigeonInteropCodec.typeList)
+    writeSize(3)
+    writeValue(value.endpointId)
+    writeValue(value.name)
+    writeValue(value.serviceId)
+  }
+
+  mutating func writeConnectionInfo(_ value: ConnectionInfo) {
+    writeByte(MessagesPigeonInteropCodec.typeList)
+    writeSize(3)
+    writeValue(value.endpointName)
+    writeValue(value.authDigits)
+    writeValue(value.isIncoming)
+  }
+
+  mutating func writePayloadMessage(_ value: PayloadMessage) {
+    writeByte(MessagesPigeonInteropCodec.typeList)
+    writeSize(4)
+    writeValue(value.id)
+    writeValue(value.type)
+    writeTypedData(MessagesPigeonInteropCodec.typeUint8List, value.bytes, alignment: 1)
+    writeValue(value.filePath)
+  }
+
+  mutating func writeTransferUpdate(_ value: TransferUpdate) {
+    writeByte(MessagesPigeonInteropCodec.typeList)
+    writeSize(4)
+    writeValue(value.payloadId)
+    writeValue(value.status)
+    writeValue(value.bytesTransferred)
+    writeValue(value.totalBytes)
+  }
+
+  mutating func writeCustomValue(_ value: Any, type valueType: Any.Type) -> Bool {
+    if valueType == NearbyStrategy.self {
+      writeByte(129)
+      writeValue(Int64((value as! NearbyStrategy).rawValue))
+      return true
+    }
+    if valueType == EndpointInfo.self {
+      writeByte(130)
+      writeEndpointInfo((value as! EndpointInfo))
+      return true
+    }
+    if valueType == ConnectionInfo.self {
+      writeByte(131)
+      writeConnectionInfo((value as! ConnectionInfo))
+      return true
+    }
+    if valueType == PayloadMessage.self {
+      writeByte(132)
+      writePayloadMessage((value as! PayloadMessage))
+      return true
+    }
+    if valueType == TransferUpdate.self {
+      writeByte(133)
+      writeTransferUpdate((value as! TransferUpdate))
+      return true
+    }
+    return false
+  }
+
+  mutating func writeCustomValueFallback(_ value: Any) -> Bool {
+    if let value = value as? NearbyStrategy {
+      writeByte(129)
+      writeValue(Int64(value.rawValue))
+      return true
+    }
+    if let value = value as? EndpointInfo {
+      writeByte(130)
+      writeEndpointInfo(value)
+      return true
+    }
+    if let value = value as? ConnectionInfo {
+      writeByte(131)
+      writeConnectionInfo(value)
+      return true
+    }
+    if let value = value as? PayloadMessage {
+      writeByte(132)
+      writePayloadMessage(value)
+      return true
+    }
+    if let value = value as? TransferUpdate {
+      writeByte(133)
+      writeTransferUpdate(value)
+      return true
+    }
+    return false
+  }
+}
+
+/// Unwraps optionals that a generic context boxed into `Any`.
+private protocol MessagesPigeonInteropOptional {
+  var pigeonWrapped: Any? { get }
+}
+
+extension Optional: MessagesPigeonInteropOptional {
+  fileprivate var pigeonWrapped: Any? {
+    switch self {
+    case .some(let wrapped):
+      return wrapped
+    case .none:
+      return nil
+    }
+  }
+}
+
+/// Writes typed lists without converting them to `[Any?]` first.
+private protocol MessagesPigeonInteropList {
+  func pigeonWrite(to writer: inout MessagesPigeonInteropWriter)
+}
+
+extension Array: MessagesPigeonInteropList {
+  fileprivate func pigeonWrite(to writer: inout MessagesPigeonInteropWriter) {
+    writer.writeByte(MessagesPigeonInteropCodec.typeList)
+    writer.writeSize(count)
+    for item in self {
+      writer.writeValue(item)
+    }
+  }
+}
+
+/// Writes typed maps without converting them to `[AnyHashable?: Any?]` first.
+private protocol MessagesPigeonInteropMap {
+  func pigeonWrite(to writer: inout MessagesPigeonInteropWriter)
+}
+
+extension Dictionary: MessagesPigeonInteropMap {
+  fileprivate func pigeonWrite(to writer: inout MessagesPigeonInteropWriter) {
+    writer.writeByte(MessagesPigeonInteropCodec.typeMap)
+    writer.writeSize(count)
+    for (key, item) in self {
+      writer.writeValue(key)
+      writer.writeValue(item)
+    }
+  }
+}
+
+
+/// Reads values in the format of Flutter's standard message codec.
+private struct MessagesPigeonInteropReader {
+  private let data: NSData
+  private let bytes: UnsafeRawBufferPointer
+  private var position = 0
+
+  init(_ data: NSData) {
+    self.data = data
+    self.bytes = UnsafeRawBufferPointer(start: data.bytes, count: data.length)
+  }
+
+  var isAtEnd: Bool { position >= bytes.count }
+
+  mutating func readByte() -> UInt8 {
+    let byte = bytes[position]
+    position += 1
+    return byte
+  }
+
+  mutating func readRaw<T: FixedWidthInteger>(_ type: T.Type) -> T {
+    let value = bytes.loadUnaligned(fromByteOffset: position, as: T.self)
+    position += MemoryLayout<T>.size
+    return T(littleEndian: value)
+  }
+
+  mutating func readSize() -> Int {
+    let byte = readByte()
+    if byte < MessagesPigeonInteropCodec.sizeUInt16 {
+      return Int(byte)
+    } else if byte == MessagesPigeonInteropCodec.sizeUInt16 {
+      return Int(readRaw(UInt16.self))
+    }
+    return Int(readRaw(UInt32.self))
+  }
+
+  mutating func readAlignment(_ alignment: Int) {
+    let mod = position % alignment
+    if mod != 0 {
+      position += alignment - mod
+    }
+  }
+
+  mutating func readTypedData<T>(_ type: T.Type, alignment: Int) -> [T] {
+    let count = readSize()
+    readAlignment(alignment)
+    let byteCount = count * MemoryLayout<T>.stride
+    let result = [T](unsafeUninitializedCapacity: count) { buffer, initializedCount in
+      if byteCount > 0 {
+        UnsafeMutableRawBufferPointer(buffer).copyMemory(
+          from: UnsafeRawBufferPointer(rebasing: bytes[position..<(position + byteCount)]))
+      }
+      initializedCount = count
+    }
+    position += byteCount
+    return result
+  }
+
+  mutating func readValue() -> Any? {
+    return readValue(ofType: readByte())
+  }
+
+  mutating func readValue(ofType type: UInt8) -> Any? {
+    switch type {
+    case MessagesPigeonInteropCodec.typeNull:
+      return nil
+    case MessagesPigeonInteropCodec.typeTrue:
+      return true
+    case MessagesPigeonInteropCodec.typeFalse:
+      return false
+    case MessagesPigeonInteropCodec.typeInt32:
+      return Int64(readRaw(Int32.self))
+    case MessagesPigeonInteropCodec.typeInt64:
+      return readRaw(Int64.self)
+    case MessagesPigeonInteropCodec.typeLargeInt, MessagesPigeonInteropCodec.typeString:
+      let count = readSize()
+      let string = String(
+        decoding: UnsafeRawBufferPointer(rebasing: bytes[position..<(position + count)]),
+        as: UTF8.self)
+      position += count
+      return string
+    case MessagesPigeonInteropCodec.typeFloat64:
+      readAlignment(8)
+      return Double(bitPattern: readRaw(UInt64.self))
+    case MessagesPigeonInteropCodec.typeUint8List:
+      return readTypedData(UInt8.self, alignment: 1)
+    case MessagesPigeonInteropCodec.typeInt32List:
+      return readTypedData(Int32.self, alignment: 4)
+    case MessagesPigeonInteropCodec.typeInt64List:
+      return readTypedData(Int64.self, alignment: 8)
+    case MessagesPigeonInteropCodec.typeFloat64List:
+      return readTypedData(Float64.self, alignment: 8)
+    case MessagesPigeonInteropCodec.typeList:
+      let count = readSize()
+      var list: [Any?] = []
+      list.reserveCapacity(count)
+      for _ in 0..<count {
+        list.append(readValue())
+      }
+      return list
+    case MessagesPigeonInteropCodec.typeMap:
+      let count = readSize()
+      var map: [AnyHashable?: Any?] = [:]
+      map.reserveCapacity(count)
+      for _ in 0..<count {
+        let key = readValue() as? AnyHashable
+        map[key] = readValue()
+      }
+      return map
+    case MessagesPigeonInteropCodec.typeFloat32List:
+      return readTypedData(Float32.self, alignment: 4)
+    default:
+      return readCustomValue(ofType: type)
+    }
+  }
+
+  mutating func readListHeader() {
+    _ = readByte()
+    _ = readSize()
+  }
+
+  mutating func read<T>(_ type: T.Type) -> T {
+    return readValue() as! T
+  }
+
+  mutating func read<E>(_ type: [E].Type) -> [E] {
+    let tag = readByte()
+    guard tag == MessagesPigeonInteropCodec.typeList else {
+      return readValue(ofType: tag) as! [E]
+    }
+    let count = readSize()
+    var list: [E] = []
+    list.reserveCapacity(count)
+    for _ in 0..<count {
+      list.append(readValue() as! E)
+    }
+    return list
+  }
+
+  mutating func read<E>(_ type: [E]?.Type) -> [E]? {
+    if bytes[position] == MessagesPigeonInteropCodec.typeNull {
+      position += 1
+      return nil
+    }
+    return read([E].self)
+  }
+
+  mutating func read<K: Hashable, V>(_ type: [K: V].Type) -> [K: V] {
+    let tag = readByte()
+    guard tag == MessagesPigeonInteropCodec.typeMap else {
+      return readValue(ofType: tag) as! [K: V]
+    }
+    let count = readSize()
+    var map: [K: V] = [:]
+    map.reserveCapacity(count)
+    for _ in 0..<count {
+      let key = readValue() as! K
+      map[key] = (readValue() as! V)
+    }
+    return map
+  }
+
+  mutating func read<K: Hashable, V>(_ type: [K: V]?.Type) -> [K: V]? {
+    if bytes[position] == MessagesPigeonInteropCodec.typeNull {
+      position += 1
+      return nil
+    }
+    return read([K: V].self)
+  }
+
+
+  mutating func readEndpointInfo() -> EndpointInfo {
+    readListHeader()
+    return EndpointInfo(
+      endpointId: read(String?.self),
+      name: read(String?.self),
+      serviceId: read(String?.self)
+    )
+  }
+
+  mutating func readConnectionInfo() -> ConnectionInfo {
+    readListHeader()
+    return ConnectionInfo(
+      endpointName: read(String?.self),
+      authDigits: read(String?.self),
+      isIncoming: read(Bool?.self)
+    )
+  }
+
+  mutating func readPayloadMessage() -> PayloadMessage {
+    readListHeader()
+    return PayloadMessage(
+      id: read(Int64?.self),
+      type: read(Int64?.self),
+      bytes: read([UInt8]?.self),
+      filePath: read(String?.self)
+    )
+  }
+
+  mutating func readTransferUpdate() -> TransferUpdate {
+    readListHeader()
+    return TransferUpdate(
+      payloadId: read(Int64?.self),
+      status: read(Int64?.self),
+      bytesTransferred: read(Int64?.self),
+      totalBytes: read(Int64?.self)
+    )
+  }
+
+  mutating func readCustomValue(ofType type: UInt8) -> Any? {
     switch type {
     case 129:
-      let enumResultAsInt: Int? = nilOrValue(self.readValue() as! Int?)
-      if let enumResultAsInt = enumResultAsInt {
-        return NearbyStrategy(rawValue: enumResultAsInt)
-      }
-      return nil
+      guard let raw = readValue() as? Int64 else { return nil }
+      return NearbyStrategy(rawValue: Int(raw))
     case 130:
-      return EndpointInfo.fromList(self.readValue() as! [Any?])
+      return readEndpointInfo()
     case 131:
-      return ConnectionInfo.fromList(self.readValue() as! [Any?])
+      return readConnectionInfo()
     case 132:
-      return PayloadMessage.fromList(self.readValue() as! [Any?])
+      return readPayloadMessage()
     case 133:
-      return TransferUpdate.fromList(self.readValue() as! [Any?])
+      return readTransferUpdate()
     default:
-      return super.readValue(ofType: type)
+      preconditionFailure("Unsupported type: \(type)")
     }
   }
 }
 
-private class MessagesPigeonCodecWriter: FlutterStandardWriter {
-  override func writeValue(_ value: Any) {
-    if let value = value as? NearbyStrategy {
-      super.writeByte(129)
-      super.writeValue(value.rawValue)
-    } else if let value = value as? EndpointInfo {
-      super.writeByte(130)
-      super.writeValue(value.toList())
-    } else if let value = value as? ConnectionInfo {
-      super.writeByte(131)
-      super.writeValue(value.toList())
-    } else if let value = value as? PayloadMessage {
-      super.writeByte(132)
-      super.writeValue(value.toList())
-    } else if let value = value as? TransferUpdate {
-      super.writeByte(133)
-      super.writeValue(value.toList())
-    } else {
-      super.writeValue(value)
+/// Encodes and decodes the buffers that native interop calls pass to and from
+/// Dart, in the same format as the message codec.
+private enum MessagesPigeonInteropCodec {
+  static let typeNull: UInt8 = 0
+  static let typeTrue: UInt8 = 1
+  static let typeFalse: UInt8 = 2
+  static let typeInt32: UInt8 = 3
+  static let typeInt64: UInt8 = 4
+  static let typeLargeInt: UInt8 = 5
+  static let typeFloat64: UInt8 = 6
+  static let typeString: UInt8 = 7
+  static let typeUint8List: UInt8 = 8
+  static let typeInt32List: UInt8 = 9
+  static let typeInt64List: UInt8 = 10
+  static let typeFloat64List: UInt8 = 11
+  static let typeList: UInt8 = 12
+  static let typeMap: UInt8 = 13
+  static let typeFloat32List: UInt8 = 14
+  static let sizeUInt16: UInt8 = 254
+  static let sizeUInt32: UInt8 = 255
+
+  static func encode(_ value: Any?) -> NSData {
+    var writer = MessagesPigeonInteropWriter()
+    writer.writeValue(value)
+    return writer.bytes.withUnsafeBytes { NSData(bytes: $0.baseAddress, length: $0.count) }
+  }
+
+  static func encodeOrNil(_ value: Any?) -> NSData? {
+    return MessagesPigeonInternal.isNullish(value) ? nil : encode(value)
+  }
+
+  static func encode(_ write: (inout MessagesPigeonInteropWriter) -> Void) -> NSData {
+    var writer = MessagesPigeonInteropWriter()
+    write(&writer)
+    return writer.bytes.withUnsafeBytes { NSData(bytes: $0.baseAddress, length: $0.count) }
+  }
+
+  static func decode(_ data: NSData?) -> Any? {
+    guard let data = data else {
+      return nil
+    }
+    var reader = MessagesPigeonInteropReader(data)
+    return reader.readValue()
+  }
+
+  static func decodeArguments(_ data: NSData) -> [Any?] {
+    return decode(data) as! [Any?]
+  }
+
+  static func typedData<T>(_ data: NSData, as type: T.Type) -> [T] {
+    let count = data.length / MemoryLayout<T>.stride
+    return [T](unsafeUninitializedCapacity: count) { buffer, initializedCount in
+      if data.length > 0 {
+        UnsafeMutableRawBufferPointer(buffer).copyMemory(
+          from: UnsafeRawBufferPointer(start: data.bytes, count: count * MemoryLayout<T>.stride))
+      }
+      initializedCount = count
     }
   }
-}
 
-private class MessagesPigeonCodecReaderWriter: FlutterStandardReaderWriter {
-  override func reader(with data: Data) -> FlutterStandardReader {
-    return MessagesPigeonCodecReader(data: data)
-  }
-
-  override func writer(with data: NSMutableData) -> FlutterStandardWriter {
-    return MessagesPigeonCodecWriter(data: data)
+  static func data<T>(_ array: [T]) -> NSData {
+    return array.withUnsafeBytes { NSData(bytes: $0.baseAddress, length: $0.count) }
   }
 }
 
-class MessagesPigeonCodec: FlutterStandardMessageCodec, @unchecked Sendable {
-  static let shared = MessagesPigeonCodec(readerWriter: MessagesPigeonCodecReaderWriter())
+
+class NearbyHostApiInstanceTracker {
+  static var instancesOfNearbyHostApi = [String: [NearbyHostApiSetup]]()
+  /// Guards the registrations, which Native Interop calls can read from any thread.
+  static let lock = NSLock()
 }
-
-
 /// Generated protocol from Pigeon that represents a handler of messages from Flutter.
-protocol NearbyHostApi {
+protocol NearbyHostApi: AnyObject {
   func startAdvertising(name: String, serviceId: String, strategy: NearbyStrategy) async throws
   func startDiscovery(serviceId: String, strategy: NearbyStrategy) async throws
   func requestConnection(name: String, endpointId: String) async throws
   func acceptConnection(endpointId: String) async throws
   func rejectConnection(endpointId: String) async throws
-  func sendBytes(endpointIds: [String], bytes: FlutterStandardTypedData) async throws -> Int64
+  func sendBytes(endpointIds: [String], bytes: [UInt8]) async throws -> Int64
   func sendFile(endpointIds: [String], path: String) async throws -> Int64
   func cancelPayload(payloadId: Int64) throws
   func stopAdvertising() throws
@@ -490,206 +1673,331 @@ protocol NearbyHostApi {
   func stopAllEndpoints() throws
 }
 
-/// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
-class NearbyHostApiSetup {
-  static var codec: FlutterStandardMessageCodec { MessagesPigeonCodec.shared }
-  /// Sets up an instance of `NearbyHostApi` to handle messages through the `binaryMessenger`.
-  static func setUp(binaryMessenger: FlutterBinaryMessenger, api: NearbyHostApi?, messageChannelSuffix: String = "") {
-    let channelSuffix = messageChannelSuffix.count > 0 ? ".\(messageChannelSuffix)" : ""
-    let startAdvertisingChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.startAdvertising\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      startAdvertisingChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let nameArg = args[0] as! String
-        let serviceIdArg = args[1] as! String
-        let strategyArg = args[2] as! NearbyStrategy
-        Task { @MainActor in
-          do {
-            try await api.startAdvertising(name: nameArg, serviceId: serviceIdArg, strategy: strategyArg)
-            reply(wrapResult(nil))
-          } catch {
-            reply(wrapError(error))
-          }
-        }
-      }
-    } else {
-      startAdvertisingChannel.setMessageHandler(nil)
+/// Generated setup class from Pigeon to register implemented NearbyHostApi classes.
+@objc class NearbyHostApiSetup: NSObject {
+  private var api: NearbyHostApi?
+  override init() {}
+  private func resolveApi() throws -> NearbyHostApi {
+    NearbyHostApiInstanceTracker.lock.lock()
+    let registeredApi = api
+    NearbyHostApiInstanceTracker.lock.unlock()
+    guard let currentApi = registeredApi else {
+      throw PigeonError(
+        code: "unregistered-instance",
+        message: "NearbyHostApi has not been registered.",
+        details: nil
+      )
     }
-    let startDiscoveryChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.startDiscovery\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      startDiscoveryChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let serviceIdArg = args[0] as! String
-        let strategyArg = args[1] as! NearbyStrategy
-        Task { @MainActor in
-          do {
-            try await api.startDiscovery(serviceId: serviceIdArg, strategy: strategyArg)
-            reply(wrapResult(nil))
-          } catch {
-            reply(wrapError(error))
-          }
-        }
-      }
-    } else {
-      startDiscoveryChannel.setMessageHandler(nil)
+    return currentApi
+  }
+  /// The engine key this wrapper was registered with. Set before the wrapper is published.
+  private var engineKey: Int64 = Int64.min
+
+  #if canImport(Flutter) || canImport(FlutterMacOS)
+    /// Registers `api` under `name` (or the default instance when `name` is omitted).
+    ///
+    /// The registration is tied to its engine: unregistering it for one engine leaves
+    /// other engines' registrations in place, and Dart code running on an engine uses
+    /// the instance registered for that engine when it is known.
+    ///
+    /// The registration is associated with the engine that owns `registrar`. The same
+    /// `api` registered from different engines is tracked as separate registrations.
+    static func register(api: NearbyHostApi, registrar: FlutterPluginRegistrar, name: String = MessagesPigeonInternal.defaultInstanceName) {
+      register(api: api, engineKey: PigeonEngineKeys.key(for: registrar), name: name)
     }
-    let requestConnectionChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.requestConnection\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      requestConnectionChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let nameArg = args[0] as! String
-        let endpointIdArg = args[1] as! String
-        Task { @MainActor in
-          do {
-            try await api.requestConnection(name: nameArg, endpointId: endpointIdArg)
-            reply(wrapResult(nil))
-          } catch {
-            reply(wrapError(error))
-          }
-        }
-      }
-    } else {
-      requestConnectionChannel.setMessageHandler(nil)
+
+    /// Removes `api` from the registrations under `name` (or the default instance
+    /// when `name` is omitted), leaving other registrations in place.
+    ///
+    /// Instances are matched by identity. Does nothing if `api` is not registered.
+    ///
+    /// Prefers the registration made from the engine that owns `registrar`, and
+    /// otherwise removes the registration of `api` under `name` if exactly one engine
+    /// holds it.
+    static func unregister(api: NearbyHostApi, registrar: FlutterPluginRegistrar, name: String = MessagesPigeonInternal.defaultInstanceName) {
+      unregister(api: api, engineKey: PigeonEngineKeys.key(for: registrar), name: name)
     }
-    let acceptConnectionChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.acceptConnection\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      acceptConnectionChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let endpointIdArg = args[0] as! String
-        Task { @MainActor in
-          do {
-            try await api.acceptConnection(endpointId: endpointIdArg)
-            reply(wrapResult(nil))
-          } catch {
-            reply(wrapError(error))
-          }
-        }
-      }
+  #endif
+
+  fileprivate static func register(api: NearbyHostApi, engineKey: Int64, name: String) {
+    NearbyHostApiInstanceTracker.lock.lock()
+    defer { NearbyHostApiInstanceTracker.lock.unlock() }
+    var list = NearbyHostApiInstanceTracker.instancesOfNearbyHostApi[name] ?? []
+    if let index = list.firstIndex(where: { $0.api === api && $0.engineKey == engineKey }) {
+      list.append(list.remove(at: index))
     } else {
-      acceptConnectionChannel.setMessageHandler(nil)
+      let wrapper = NearbyHostApiSetup()
+      wrapper.engineKey = engineKey
+      wrapper.api = api
+      list.append(wrapper)
     }
-    let rejectConnectionChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.rejectConnection\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      rejectConnectionChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let endpointIdArg = args[0] as! String
-        Task { @MainActor in
-          do {
-            try await api.rejectConnection(endpointId: endpointIdArg)
-            reply(wrapResult(nil))
-          } catch {
-            reply(wrapError(error))
-          }
-        }
+    NearbyHostApiInstanceTracker.instancesOfNearbyHostApi[name] = list
+  }
+
+  fileprivate static func unregister(api: NearbyHostApi, engineKey: Int64, name: String) {
+    // Removed entries are kept alive until after unlocking so their deinit cannot run while the
+    // non-recursive lock is held.
+    var displaced: [Any] = []
+    do {
+      NearbyHostApiInstanceTracker.lock.lock()
+      defer { NearbyHostApiInstanceTracker.lock.unlock() }
+      guard var list = NearbyHostApiInstanceTracker.instancesOfNearbyHostApi[name] else {
+        return
       }
-    } else {
-      rejectConnectionChannel.setMessageHandler(nil)
-    }
-    let sendBytesChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.sendBytes\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      sendBytesChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let endpointIdsArg = args[0] as! [String]
-        let bytesArg = args[1] as! FlutterStandardTypedData
-        Task { @MainActor in
-          do {
-            let result = try await api.sendBytes(endpointIds: endpointIdsArg, bytes: bytesArg)
-            reply(wrapResult(result))
-          } catch {
-            reply(wrapError(error))
-          }
+      let removeKey: Int64
+      if list.contains(where: { $0.api === api && $0.engineKey == engineKey }) {
+        removeKey = engineKey
+      } else {
+        let keys = Set(list.filter { $0.api === api }.map { $0.engineKey })
+        guard keys.count == 1, let onlyKey = keys.first else {
+          return
         }
+        removeKey = onlyKey
       }
-    } else {
-      sendBytesChannel.setMessageHandler(nil)
-    }
-    let sendFileChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.sendFile\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      sendFileChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let endpointIdsArg = args[0] as! [String]
-        let pathArg = args[1] as! String
-        Task { @MainActor in
-          do {
-            let result = try await api.sendFile(endpointIds: endpointIdsArg, path: pathArg)
-            reply(wrapResult(result))
-          } catch {
-            reply(wrapError(error))
-          }
+      list.removeAll { entry in
+        guard let existing = entry.api else {
+          return false
         }
-      }
-    } else {
-      sendFileChannel.setMessageHandler(nil)
-    }
-    let cancelPayloadChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.cancelPayload\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      cancelPayloadChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let payloadIdArg = args[0] as! Int64
-        do {
-          try api.cancelPayload(payloadId: payloadIdArg)
-          reply(wrapResult(nil))
-        } catch {
-          reply(wrapError(error))
+        if existing === api && entry.engineKey == removeKey {
+          displaced.append(existing)
+          displaced.append(entry)
+          entry.api = nil
+          return true
         }
+        return false
       }
-    } else {
-      cancelPayloadChannel.setMessageHandler(nil)
-    }
-    let stopAdvertisingChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopAdvertising\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      stopAdvertisingChannel.setMessageHandler { _, reply in
-        do {
-          try api.stopAdvertising()
-          reply(wrapResult(nil))
-        } catch {
-          reply(wrapError(error))
-        }
+      if list.isEmpty {
+        NearbyHostApiInstanceTracker.instancesOfNearbyHostApi.removeValue(forKey: name)
+      } else {
+        NearbyHostApiInstanceTracker.instancesOfNearbyHostApi[name] = list
       }
-    } else {
-      stopAdvertisingChannel.setMessageHandler(nil)
     }
-    let stopDiscoveryChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopDiscovery\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      stopDiscoveryChannel.setMessageHandler { _, reply in
-        do {
-          try api.stopDiscovery()
-          reply(wrapResult(nil))
-        } catch {
-          reply(wrapError(error))
-        }
-      }
-    } else {
-      stopDiscoveryChannel.setMessageHandler(nil)
+    withExtendedLifetime(displaced) {}
+  }
+
+  /// Returns the instance generated Dart code should use for `name` (or the default
+  /// instance).
+  ///
+  /// Prefers the most recent registration whose engine key is `engineId`, then
+  /// `affinityKey`, then the most recent registration. `Int64.min` means unknown.
+  @objc static func pigeonResolveInstance(engineId: Int64, affinityKey: Int64, name: String = MessagesPigeonInternal.defaultInstanceName) -> NearbyHostApiSetup? {
+    NearbyHostApiInstanceTracker.lock.lock()
+    defer { NearbyHostApiInstanceTracker.lock.unlock() }
+    guard let list = NearbyHostApiInstanceTracker.instancesOfNearbyHostApi[name] else {
+      return nil
     }
-    let disconnectChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.disconnect\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      disconnectChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let endpointIdArg = args[0] as! String
-        do {
-          try api.disconnect(endpointId: endpointIdArg)
-          reply(wrapResult(nil))
-        } catch {
-          reply(wrapError(error))
-        }
-      }
-    } else {
-      disconnectChannel.setMessageHandler(nil)
+    if engineId != Int64.min, let match = list.last(where: { $0.engineKey == engineId }) {
+      return match
     }
-    let stopAllEndpointsChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopAllEndpoints\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      stopAllEndpointsChannel.setMessageHandler { _, reply in
-        do {
-          try api.stopAllEndpoints()
-          reply(wrapResult(nil))
-        } catch {
-          reply(wrapError(error))
-        }
-      }
-    } else {
-      stopAllEndpointsChannel.setMessageHandler(nil)
+    if affinityKey != Int64.min, let match = list.last(where: { $0.engineKey == affinityKey }) {
+      return match
     }
+    return list.last
+  }
+
+  /// Returns the engine key `instance` was registered with, or `Int64.min` if unknown.
+  @objc static func pigeonEngineKey(of instance: NearbyHostApiSetup) -> Int64 {
+    return instance.engineKey
+  }
+  @objc func startAdvertising(name nameArg: NSString, serviceId serviceIdArg: NSString, strategy strategyArg: Int64, wrappedError: PigeonError) async {
+    do {
+      let activeApi = try resolveApi()
+      try await activeApi.startAdvertising(name: nameArg as String, serviceId: serviceIdArg as String, strategy: NearbyStrategy(rawValue: Int(strategyArg))!)
+      return
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return
+  }
+  @objc func startDiscovery(serviceId serviceIdArg: NSString, strategy strategyArg: Int64, wrappedError: PigeonError) async {
+    do {
+      let activeApi = try resolveApi()
+      try await activeApi.startDiscovery(serviceId: serviceIdArg as String, strategy: NearbyStrategy(rawValue: Int(strategyArg))!)
+      return
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return
+  }
+  @objc func requestConnection(name nameArg: NSString, endpointId endpointIdArg: NSString, wrappedError: PigeonError) async {
+    do {
+      let activeApi = try resolveApi()
+      try await activeApi.requestConnection(name: nameArg as String, endpointId: endpointIdArg as String)
+      return
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return
+  }
+  @objc func acceptConnection(endpointId endpointIdArg: NSString, wrappedError: PigeonError) async {
+    do {
+      let activeApi = try resolveApi()
+      try await activeApi.acceptConnection(endpointId: endpointIdArg as String)
+      return
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return
+  }
+  @objc func rejectConnection(endpointId endpointIdArg: NSString, wrappedError: PigeonError) async {
+    do {
+      let activeApi = try resolveApi()
+      try await activeApi.rejectConnection(endpointId: endpointIdArg as String)
+      return
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return
+  }
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  @objc func sendBytes(bytes bytesArg: NSData, pigeonVar_args: NSData, wrappedError: PigeonError) async -> NSNumber? {
+    do {
+      let activeApi = try resolveApi()
+      var reader = MessagesPigeonInteropReader(pigeonVar_args)
+      reader.readListHeader()
+      let endpointIdsArg = reader.read([String].self)
+      let res: Int64 = try await activeApi.sendBytes(endpointIds: endpointIdsArg, bytes: MessagesPigeonInteropCodec.typedData(bytesArg, as: UInt8.self))
+      return NSNumber(value: res)
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return nil
+  }
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  @objc func sendFile(path pathArg: NSString, pigeonVar_args: NSData, wrappedError: PigeonError) async -> NSNumber? {
+    do {
+      let activeApi = try resolveApi()
+      var reader = MessagesPigeonInteropReader(pigeonVar_args)
+      reader.readListHeader()
+      let endpointIdsArg = reader.read([String].self)
+      let res: Int64 = try await activeApi.sendFile(endpointIds: endpointIdsArg, path: pathArg as String)
+      return NSNumber(value: res)
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return nil
+  }
+  @objc func cancelPayload(payloadId payloadIdArg: Int64, wrappedError: PigeonError) {
+    do {
+      let activeApi = try resolveApi()
+      try activeApi.cancelPayload(payloadId: payloadIdArg)
+      return
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return
+  }
+  @objc func stopAdvertising(wrappedError: PigeonError) {
+    do {
+      let activeApi = try resolveApi()
+      try activeApi.stopAdvertising()
+      return
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return
+  }
+  @objc func stopDiscovery(wrappedError: PigeonError) {
+    do {
+      let activeApi = try resolveApi()
+      try activeApi.stopDiscovery()
+      return
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return
+  }
+  @objc func disconnect(endpointId endpointIdArg: NSString, wrappedError: PigeonError) {
+    do {
+      let activeApi = try resolveApi()
+      try activeApi.disconnect(endpointId: endpointIdArg as String)
+      return
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return
+  }
+  @objc func stopAllEndpoints(wrappedError: PigeonError) {
+    do {
+      let activeApi = try resolveApi()
+      try activeApi.stopAllEndpoints()
+      return
+    } catch let error as PigeonError {
+      wrappedError.code = error.code
+      wrappedError.message = error.message
+      wrappedError.details = error.details
+    } catch let error {
+      wrappedError.code = "\(error)"
+      wrappedError.message = "\(Swift.type(of: error))"
+      wrappedError.details = "Stacktrace: \(Thread.callStackSymbols)"
+    }
+    return
   }
 }
 
@@ -697,187 +2005,189 @@ class NearbyHostApiSetup {
 /// `NativeNearbyConnections.setListener`.
 ///
 /// Generated protocol from Pigeon that represents Flutter messages that can be called from Swift.
-protocol NearbyFlutterApiProtocol {
+@objc protocol NearbyFlutterApiBridge {
   /// Discovery found an advertiser with the same service id.
-  @MainActor func onEndpointFound(info infoArg: EndpointInfo) async throws
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  @objc func onEndpointFound(pigeonVar_args: NSData, error: PigeonError)
   /// A previously found advertiser is no longer reachable.
-  @MainActor func onEndpointLost(endpointId endpointIdArg: String) async throws
+  @objc func onEndpointLost(endpointId endpointIdArg: NSString, error: PigeonError)
   /// A connection was requested, by either side. Both sides must call
   /// `acceptConnection` (ideally after users compare [ConnectionInfo.authDigits])
   /// or `rejectConnection`.
-  @MainActor func onConnectionInitiated(endpointId endpointIdArg: String, info infoArg: ConnectionInfo) async throws
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  @objc func onConnectionInitiated(endpointId endpointIdArg: NSString, pigeonVar_args: NSData, error: PigeonError)
   /// Outcome of a connection request, using Android `ConnectionsStatusCodes`:
   /// 0 = connected, 8004 = rejected by one or both sides, 13 = connection
   /// broke before it was accepted.
-  @MainActor func onConnectionResult(endpointId endpointIdArg: String, statusCode statusCodeArg: Int64) async throws
+  @objc func onConnectionResult(endpointId endpointIdArg: NSString, statusCode statusCodeArg: Int64, error: PigeonError)
   /// The connection ended. No more data can be sent or received.
-  @MainActor func onDisconnected(endpointId endpointIdArg: String) async throws
+  @objc func onDisconnected(endpointId endpointIdArg: NSString, error: PigeonError)
   /// A payload started arriving. Bytes payloads are complete here; wait for
   /// [onPayloadTransferUpdate] success before reading a file payload.
-  @MainActor func onPayloadReceived(endpointId endpointIdArg: String, payload payloadArg: PayloadMessage) async throws
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  @objc func onPayloadReceived(endpointId endpointIdArg: NSString, pigeonVar_args: NSData, error: PigeonError)
   /// Progress of a payload being sent or received.
-  @MainActor func onPayloadTransferUpdate(endpointId endpointIdArg: String, update updateArg: TransferUpdate) async throws
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  @objc func onPayloadTransferUpdate(endpointId endpointIdArg: NSString, pigeonVar_args: NSData, error: PigeonError)
 }
-class NearbyFlutterApi: NearbyFlutterApiProtocol {
-  private let binaryMessenger: FlutterBinaryMessenger
-  private let messageChannelSuffix: String
-  init(binaryMessenger: FlutterBinaryMessenger, messageChannelSuffix: String = "") {
-    self.binaryMessenger = binaryMessenger
-    self.messageChannelSuffix = messageChannelSuffix.count > 0 ? ".\(messageChannelSuffix)" : ""
+
+@objc class NearbyFlutterApiRegistrar: NSObject {
+  static var registeredNearbyFlutterApi = [String: [NearbyFlutterApi]]()
+  /// Guards the registrations, which Native Interop calls can read from any thread.
+  static let lock = NSLock()
+
+  /// Registers the Dart implementation `api` under `name` (or the default instance
+  /// when `name` is omitted).
+  ///
+  /// Called by generated Dart code. `engineId` and `affinityKey` identify the engine
+  /// that registered `api`, or are `Int64.min` when unknown.
+  /// Registering an instance that is already registered under `name` updates its
+  /// keys and keeps its position.
+  @objc static func registerInstance(api: NearbyFlutterApiBridge, engineId: Int64, affinityKey: Int64, name: String = MessagesPigeonInternal.defaultInstanceName) {
+    let apiObject = api as AnyObject
+    NearbyFlutterApiRegistrar.lock.lock()
+    defer { NearbyFlutterApiRegistrar.lock.unlock() }
+    var list = NearbyFlutterApiRegistrar.registeredNearbyFlutterApi[name] ?? []
+    let registration = NearbyFlutterApi(api: api, engineId: engineId, affinityKey: affinityKey)
+    if let index = list.firstIndex(where: { ($0.api as AnyObject) === apiObject }) {
+      list[index] = registration
+    } else {
+      list.append(registration)
+    }
+    NearbyFlutterApiRegistrar.registeredNearbyFlutterApi[name] = list
   }
-  var codec: MessagesPigeonCodec {
-    return MessagesPigeonCodec.shared
+
+  /// Removes `api` from the registrations under `name` (or the default instance
+  /// when `name` is omitted), leaving other registrations in place.
+  ///
+  /// Instances are matched by identity. Does nothing if `api` is not registered.
+  @objc static func unregisterInstance(api: NearbyFlutterApiBridge, name: String = MessagesPigeonInternal.defaultInstanceName) {
+    let apiObject = api as AnyObject
+    // Removed entries are kept alive until after unlocking so their deinit cannot run while the
+    // non-recursive lock is held.
+    var displaced: [NearbyFlutterApi] = []
+    do {
+      NearbyFlutterApiRegistrar.lock.lock()
+      defer { NearbyFlutterApiRegistrar.lock.unlock() }
+      guard var list = NearbyFlutterApiRegistrar.registeredNearbyFlutterApi[name] else {
+        return
+      }
+      list.removeAll { entry in
+        if (entry.api as AnyObject) === apiObject {
+          displaced.append(entry)
+          return true
+        }
+        return false
+      }
+      if list.isEmpty {
+        NearbyFlutterApiRegistrar.registeredNearbyFlutterApi.removeValue(forKey: name)
+      } else {
+        NearbyFlutterApiRegistrar.registeredNearbyFlutterApi[name] = list
+      }
+    }
+    withExtendedLifetime(displaced) {}
   }
+
+  #if canImport(Flutter) || canImport(FlutterMacOS)
+    /// Returns the instance for `name` (or the default instance when `name` is omitted)
+    /// that was registered from the engine that owns `registrar`.
+    ///
+    /// When no instance is known to belong to that engine, falls back to the most
+    /// recent registration for `name`. Returns nil if none is registered.
+    static func getInstance(registrar: FlutterPluginRegistrar, name: String = MessagesPigeonInternal.defaultInstanceName) -> NearbyFlutterApi? {
+      return getInstance(engineKey: PigeonEngineKeys.key(for: registrar), name: name)
+    }
+  #endif
+
+  fileprivate static func getInstance(engineKey: Int64, name: String) -> NearbyFlutterApi? {
+    NearbyFlutterApiRegistrar.lock.lock()
+    defer { NearbyFlutterApiRegistrar.lock.unlock() }
+    guard let list = NearbyFlutterApiRegistrar.registeredNearbyFlutterApi[name] else {
+      return nil
+    }
+    if engineKey != Int64.min, let match = list.last(where: { $0.engineId == engineKey }) ?? list.last(where: { $0.affinityKey == engineKey }) {
+      return match
+    }
+    return list.last
+  }
+}
+
+class NearbyFlutterApi {
+  fileprivate let api: NearbyFlutterApiBridge
+  fileprivate let engineId: Int64
+  fileprivate let affinityKey: Int64
+
+  fileprivate init(api: NearbyFlutterApiBridge, engineId: Int64, affinityKey: Int64) {
+    self.api = api
+    self.engineId = engineId
+    self.affinityKey = affinityKey
+  }
+
   /// Discovery found an advertiser with the same service id.
-  @MainActor func onEndpointFound(info infoArg: EndpointInfo) async throws {
-    return try await withCheckedThrowingContinuation { continuation in
-      let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onEndpointFound\(messageChannelSuffix)"
-      let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
-      channel.sendMessage([infoArg] as [Any?]) { response in
-        guard let listResponse = response as? [Any?] else {
-          continuation.resume(throwing: createConnectionError(withChannelName: channelName))
-          return
-        }
-        if listResponse.count > 1 {
-          let code: String = listResponse[0] as! String
-          let message: String? = nilOrValue(listResponse[1])
-          let details: String? = nilOrValue(listResponse[2])
-          continuation.resume(throwing: PigeonError(code: code, message: message, details: details))
-        } else {
-          continuation.resume()
-        }
-      }
+  func onEndpointFound(info infoArg: EndpointInfo) throws {
+    let error = PigeonError()
+    api.onEndpointFound(pigeonVar_args: MessagesPigeonInteropCodec.encode { $0.writeByte(MessagesPigeonInteropCodec.typeList); $0.writeSize(1); $0.writeValue(infoArg) }, error: error)
+    if (error.code != nil) {
+      throw error
     }
   }
+
   /// A previously found advertiser is no longer reachable.
-  @MainActor func onEndpointLost(endpointId endpointIdArg: String) async throws {
-    return try await withCheckedThrowingContinuation { continuation in
-      let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onEndpointLost\(messageChannelSuffix)"
-      let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
-      channel.sendMessage([endpointIdArg] as [Any?]) { response in
-        guard let listResponse = response as? [Any?] else {
-          continuation.resume(throwing: createConnectionError(withChannelName: channelName))
-          return
-        }
-        if listResponse.count > 1 {
-          let code: String = listResponse[0] as! String
-          let message: String? = nilOrValue(listResponse[1])
-          let details: String? = nilOrValue(listResponse[2])
-          continuation.resume(throwing: PigeonError(code: code, message: message, details: details))
-        } else {
-          continuation.resume()
-        }
-      }
+  func onEndpointLost(endpointId endpointIdArg: String) throws {
+    let error = PigeonError()
+    api.onEndpointLost(endpointId: endpointIdArg as NSString, error: error)
+    if (error.code != nil) {
+      throw error
     }
   }
+
   /// A connection was requested, by either side. Both sides must call
   /// `acceptConnection` (ideally after users compare [ConnectionInfo.authDigits])
   /// or `rejectConnection`.
-  @MainActor func onConnectionInitiated(endpointId endpointIdArg: String, info infoArg: ConnectionInfo) async throws {
-    return try await withCheckedThrowingContinuation { continuation in
-      let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onConnectionInitiated\(messageChannelSuffix)"
-      let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
-      channel.sendMessage([endpointIdArg, infoArg] as [Any?]) { response in
-        guard let listResponse = response as? [Any?] else {
-          continuation.resume(throwing: createConnectionError(withChannelName: channelName))
-          return
-        }
-        if listResponse.count > 1 {
-          let code: String = listResponse[0] as! String
-          let message: String? = nilOrValue(listResponse[1])
-          let details: String? = nilOrValue(listResponse[2])
-          continuation.resume(throwing: PigeonError(code: code, message: message, details: details))
-        } else {
-          continuation.resume()
-        }
-      }
+  func onConnectionInitiated(endpointId endpointIdArg: String, info infoArg: ConnectionInfo) throws {
+    let error = PigeonError()
+    api.onConnectionInitiated(endpointId: endpointIdArg as NSString, pigeonVar_args: MessagesPigeonInteropCodec.encode { $0.writeByte(MessagesPigeonInteropCodec.typeList); $0.writeSize(1); $0.writeValue(infoArg) }, error: error)
+    if (error.code != nil) {
+      throw error
     }
   }
+
   /// Outcome of a connection request, using Android `ConnectionsStatusCodes`:
   /// 0 = connected, 8004 = rejected by one or both sides, 13 = connection
   /// broke before it was accepted.
-  @MainActor func onConnectionResult(endpointId endpointIdArg: String, statusCode statusCodeArg: Int64) async throws {
-    return try await withCheckedThrowingContinuation { continuation in
-      let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onConnectionResult\(messageChannelSuffix)"
-      let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
-      channel.sendMessage([endpointIdArg, statusCodeArg] as [Any?]) { response in
-        guard let listResponse = response as? [Any?] else {
-          continuation.resume(throwing: createConnectionError(withChannelName: channelName))
-          return
-        }
-        if listResponse.count > 1 {
-          let code: String = listResponse[0] as! String
-          let message: String? = nilOrValue(listResponse[1])
-          let details: String? = nilOrValue(listResponse[2])
-          continuation.resume(throwing: PigeonError(code: code, message: message, details: details))
-        } else {
-          continuation.resume()
-        }
-      }
+  func onConnectionResult(endpointId endpointIdArg: String, statusCode statusCodeArg: Int64) throws {
+    let error = PigeonError()
+    api.onConnectionResult(endpointId: endpointIdArg as NSString, statusCode: statusCodeArg, error: error)
+    if (error.code != nil) {
+      throw error
     }
   }
+
   /// The connection ended. No more data can be sent or received.
-  @MainActor func onDisconnected(endpointId endpointIdArg: String) async throws {
-    return try await withCheckedThrowingContinuation { continuation in
-      let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onDisconnected\(messageChannelSuffix)"
-      let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
-      channel.sendMessage([endpointIdArg] as [Any?]) { response in
-        guard let listResponse = response as? [Any?] else {
-          continuation.resume(throwing: createConnectionError(withChannelName: channelName))
-          return
-        }
-        if listResponse.count > 1 {
-          let code: String = listResponse[0] as! String
-          let message: String? = nilOrValue(listResponse[1])
-          let details: String? = nilOrValue(listResponse[2])
-          continuation.resume(throwing: PigeonError(code: code, message: message, details: details))
-        } else {
-          continuation.resume()
-        }
-      }
+  func onDisconnected(endpointId endpointIdArg: String) throws {
+    let error = PigeonError()
+    api.onDisconnected(endpointId: endpointIdArg as NSString, error: error)
+    if (error.code != nil) {
+      throw error
     }
   }
+
   /// A payload started arriving. Bytes payloads are complete here; wait for
   /// [onPayloadTransferUpdate] success before reading a file payload.
-  @MainActor func onPayloadReceived(endpointId endpointIdArg: String, payload payloadArg: PayloadMessage) async throws {
-    return try await withCheckedThrowingContinuation { continuation in
-      let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onPayloadReceived\(messageChannelSuffix)"
-      let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
-      channel.sendMessage([endpointIdArg, payloadArg] as [Any?]) { response in
-        guard let listResponse = response as? [Any?] else {
-          continuation.resume(throwing: createConnectionError(withChannelName: channelName))
-          return
-        }
-        if listResponse.count > 1 {
-          let code: String = listResponse[0] as! String
-          let message: String? = nilOrValue(listResponse[1])
-          let details: String? = nilOrValue(listResponse[2])
-          continuation.resume(throwing: PigeonError(code: code, message: message, details: details))
-        } else {
-          continuation.resume()
-        }
-      }
+  func onPayloadReceived(endpointId endpointIdArg: String, payload payloadArg: PayloadMessage) throws {
+    let error = PigeonError()
+    api.onPayloadReceived(endpointId: endpointIdArg as NSString, pigeonVar_args: MessagesPigeonInteropCodec.encode { $0.writeByte(MessagesPigeonInteropCodec.typeList); $0.writeSize(1); $0.writeValue(payloadArg) }, error: error)
+    if (error.code != nil) {
+      throw error
     }
   }
+
   /// Progress of a payload being sent or received.
-  @MainActor func onPayloadTransferUpdate(endpointId endpointIdArg: String, update updateArg: TransferUpdate) async throws {
-    return try await withCheckedThrowingContinuation { continuation in
-      let channelName: String = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onPayloadTransferUpdate\(messageChannelSuffix)"
-      let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
-      channel.sendMessage([endpointIdArg, updateArg] as [Any?]) { response in
-        guard let listResponse = response as? [Any?] else {
-          continuation.resume(throwing: createConnectionError(withChannelName: channelName))
-          return
-        }
-        if listResponse.count > 1 {
-          let code: String = listResponse[0] as! String
-          let message: String? = nilOrValue(listResponse[1])
-          let details: String? = nilOrValue(listResponse[2])
-          continuation.resume(throwing: PigeonError(code: code, message: message, details: details))
-        } else {
-          continuation.resume()
-        }
-      }
+  func onPayloadTransferUpdate(endpointId endpointIdArg: String, update updateArg: TransferUpdate) throws {
+    let error = PigeonError()
+    api.onPayloadTransferUpdate(endpointId: endpointIdArg as NSString, pigeonVar_args: MessagesPigeonInteropCodec.encode { $0.writeByte(MessagesPigeonInteropCodec.typeList); $0.writeSize(1); $0.writeValue(updateArg) }, error: error)
+    if (error.code != nil) {
+      throw error
     }
   }
 }

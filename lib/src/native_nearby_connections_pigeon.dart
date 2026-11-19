@@ -6,9 +6,13 @@ import 'gen/messages.g.dart';
 /// An implementation of [NativeNearbyConnectionsPlatform] backed by Pigeon.
 class PigeonNativeNearbyConnections extends NativeNearbyConnectionsPlatform {
   PigeonNativeNearbyConnections({@visibleForTesting NearbyHostApi? hostApi})
-    : _api = hostApi ?? NearbyHostApi();
+    : _apiOverride = hostApi;
 
-  final NearbyHostApi _api;
+  final NearbyHostApi? _apiOverride;
+
+  // Lazy: Dart plugin registration runs before the native interop is ready.
+  late final NearbyHostApi _api =
+      _apiOverride ?? NearbyHostApi.createWithNativeInteropApi();
 
   @override
   void setListener(NearbyFlutterApi? listener) =>

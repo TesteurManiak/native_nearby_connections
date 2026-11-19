@@ -5,11 +5,9 @@
 package com.maniak.native_nearby_connections
 
 import android.util.Log
-import io.flutter.plugin.common.BasicMessageChannel
-import io.flutter.plugin.common.BinaryMessenger
-import io.flutter.plugin.common.EventChannel
-import io.flutter.plugin.common.MessageCodec
-import io.flutter.plugin.common.StandardMethodCodec
+import androidx.annotation.Keep
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.StandardMessageCodec
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -195,17 +193,90 @@ private object MessagesPigeonUtils {
  * @property message The error message.
  * @property details The error details. Must be a datatype supported by the api codec.
  */
+@Keep
 class FlutterError (
   val code: String,
   override val message: String? = null,
   val details: Any? = null
 ) : RuntimeException()
+private const val defaultInstanceName = "PigeonDefaultClassName32uh4ui3lh445uh4h3l2l455g4y34u"
+
+/** Computes keys that identify the Flutter engine a registration belongs to. */
+private object MessagesPigeonEngineKeys {
+  /** Sentinel meaning that no engine key is known. */
+  const val NO_KEY: Long = Long.MIN_VALUE
+
+  /** `FlutterPluginBinding.getEngineId`, which is missing on older Flutter versions. */
+  private val getEngineIdMethod: java.lang.reflect.Method? by lazy {
+    try {
+      FlutterPlugin.FlutterPluginBinding::class.java.getMethod("getEngineId")
+    } catch (e: Exception) {
+      null
+    }
+  }
+
+  /** Keys for engine messengers, used when an exact engine id is unavailable. */
+  private val messengerKeys = java.util.WeakHashMap<Any, Long>()
+
+  /**
+   * Keys already computed for each binding, so `register` and `unregister` with
+   * the same binding always agree even if [keyOf] for its engine later records
+   * an exact key for the messenger.
+   */
+  private val bindingKeys = java.util.WeakHashMap<FlutterPlugin.FlutterPluginBinding, Long>()
+
+  private var nextSyntheticKey: Long = -1L
+
+  /** Returns the key for the engine that [binding] belongs to. */
+  @Synchronized
+  fun keyOf(binding: FlutterPlugin.FlutterPluginBinding): Long {
+    return bindingKeys.getOrPut(binding) { computeKey(binding) }
+  }
+
+  private fun computeKey(binding: FlutterPlugin.FlutterPluginBinding): Long {
+    val method = getEngineIdMethod
+    if (method != null) {
+      try {
+        // Real engine ids are never 0, but an engine without one, or a test
+        // double, reports 0, which must not be shared between engines.
+        val engineId = method.invoke(binding) as Long
+        if (engineId != 0L) {
+          return engineId
+        }
+      } catch (e: Exception) {
+        // Fall back to a messenger-based key.
+      }
+    }
+    return keyOfMessenger(binding.binaryMessenger)
+  }
+
+  /** Returns the key for [engine]. */
+  @Synchronized
+  fun keyOf(engine: FlutterEngine): Long {
+    val key = engine.engineId
+    if (key == 0L) {
+      // Real engine ids are never 0, but an engine without one, or a test
+      // double, reports 0, which must not be shared between engines.
+      return keyOfMessenger(engine.dartExecutor)
+    }
+    // Record the exact key so later lookups through a binding for this engine
+    // agree with it even when the binding cannot report the engine id.
+    messengerKeys[engine.dartExecutor] = key
+    return key
+  }
+
+  @Synchronized
+  private fun keyOfMessenger(messenger: Any): Long {
+    return messengerKeys.getOrPut(messenger) { nextSyntheticKey-- }
+  }
+}
 
 /**
  * Connection topology. Advertiser and discoverer must use the same strategy.
  *
  * See https://developers.google.com/nearby/connections/strategies.
  */
+@Keep
 enum class NearbyStrategy(val raw: Int) {
   /**
    * M-to-N: every device can advertise, discover and hold several
@@ -221,6 +292,7 @@ enum class NearbyStrategy(val raw: Int) {
   /** 1-to-1: a single connection at a time. Highest bandwidth. */
   POINT_TO_POINT(2);
 
+  @Keep
   companion object {
     private val pigeonValues = values()
 
@@ -235,6 +307,7 @@ enum class NearbyStrategy(val raw: Int) {
  *
  * Generated class from Pigeon that represents data sent in messages.
  */
+@Keep
 data class EndpointInfo (
   val endpointId: String? = null,
   val name: String? = null,
@@ -285,6 +358,7 @@ data class EndpointInfo (
  *
  * Generated class from Pigeon that represents data sent in messages.
  */
+@Keep
 data class ConnectionInfo (
   /** Name the remote device advertised or requested with. */
   val endpointName: String? = null,
@@ -344,6 +418,7 @@ data class ConnectionInfo (
  *
  * Generated class from Pigeon that represents data sent in messages.
  */
+@Keep
 data class PayloadMessage (
   val id: Long? = null,
   val type: Long? = null,
@@ -400,6 +475,7 @@ data class PayloadMessage (
  *
  * Generated class from Pigeon that represents data sent in messages.
  */
+@Keep
 data class TransferUpdate (
   val payloadId: Long? = null,
   val status: Long? = null,
@@ -505,8 +581,34 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
   }
 }
 
+/**
+ * Encodes and decodes the buffers that native interop calls pass to and from
+ * Dart, in the same format as the message codec.
+ */
+private object MessagesPigeonInteropCodec : MessagesPigeonCodec() {
+  fun encode(value: Any?): ByteArray {
+    val stream = ByteArrayOutputStream()
+    writeValue(stream, value)
+    return stream.toByteArray()
+  }
 
-/** Generated interface from Pigeon that represents a handler of messages from Flutter. */
+  fun encodeOrNull(value: Any?): ByteArray? {
+    return if (value == null) null else encode(value)
+  }
+
+  fun decode(bytes: ByteArray): Any? {
+    return decodeMessage(ByteBuffer.wrap(bytes))
+  }
+
+  fun decodeArguments(bytes: ByteArray): List<Any?> {
+    return decode(bytes) as List<Any?>
+  }
+}
+
+
+
+val NearbyHostApiInstances: MutableMap<String, MutableList<NearbyHostApiRegistrar>> = mutableMapOf()
+@Keep
 interface NearbyHostApi {
   suspend fun startAdvertising(name: String, serviceId: String, strategy: NearbyStrategy)
   suspend fun startDiscovery(serviceId: String, strategy: NearbyStrategy)
@@ -520,243 +622,262 @@ interface NearbyHostApi {
   fun stopDiscovery()
   fun disconnect(endpointId: String)
   fun stopAllEndpoints()
+}
+@Keep
+class NearbyHostApiRegistrar private constructor(private val engineKey: Long) {
+  @Volatile private var api: NearbyHostApi? = null
+
+  constructor() : this(MessagesPigeonEngineKeys.NO_KEY)
+
+  /**
+   * Registers [api] under [name] (or the default instance when [name] is
+   * omitted) for the engine of the plugin binding [binding].
+   *
+   * The registration is tied to that engine: unregistering it for this engine
+   * leaves other engines' registrations in place, and Dart code running on an
+   * engine uses the instance registered for that engine when it is known.
+   */
+  @Keep
+  fun register(api: NearbyHostApi, binding: FlutterPlugin.FlutterPluginBinding, name: String = defaultInstanceName) {
+    registerWithKey(api, MessagesPigeonEngineKeys.keyOf(binding), name)
+  }
+
+  /**
+   * Registers [api] under [name] (or the default instance when [name] is
+   * omitted) for the engine of [engine].
+   *
+   * The registration is tied to that engine: unregistering it for this engine
+   * leaves other engines' registrations in place, and Dart code running on an
+   * engine uses the instance registered for that engine when it is known.
+   */
+  @Keep
+  fun register(api: NearbyHostApi, engine: FlutterEngine, name: String = defaultInstanceName) {
+    registerWithKey(api, MessagesPigeonEngineKeys.keyOf(engine), name)
+  }
+
+  /**
+   * Removes [api] from the registrations under [name] (or the default instance
+   * when [name] is omitted) for the engine of the plugin binding [binding], leaving other
+   * registrations in place.
+   *
+   * Instances are matched by identity. If [api] is not registered for that
+   * engine but is registered for exactly one other engine, that registration is
+   * removed. Does nothing if [api] is not registered, or is only registered for
+   * several other engines.
+   */
+  @Keep
+  fun unregister(api: NearbyHostApi, binding: FlutterPlugin.FlutterPluginBinding, name: String = defaultInstanceName) {
+    unregisterWithKey(api, MessagesPigeonEngineKeys.keyOf(binding), name)
+  }
+
+  /**
+   * Removes [api] from the registrations under [name] (or the default instance
+   * when [name] is omitted) for the engine of [engine], leaving other
+   * registrations in place.
+   *
+   * Instances are matched by identity. If [api] is not registered for that
+   * engine but is registered for exactly one other engine, that registration is
+   * removed. Does nothing if [api] is not registered, or is only registered for
+   * several other engines.
+   */
+  @Keep
+  fun unregister(api: NearbyHostApi, engine: FlutterEngine, name: String = defaultInstanceName) {
+    unregisterWithKey(api, MessagesPigeonEngineKeys.keyOf(engine), name)
+  }
+
+  private fun registerWithKey(api: NearbyHostApi, engineKey: Long, name: String) {
+    kotlin.synchronized(NearbyHostApiInstances) {
+      val list = NearbyHostApiInstances.getOrPut(name) { mutableListOf() }
+      val index = list.indexOfFirst { it.api === api && it.engineKey == engineKey }
+      if (index >= 0) {
+        list.add(list.removeAt(index))
+      } else {
+        val wrapper = NearbyHostApiRegistrar(engineKey)
+        wrapper.api = api
+        list.add(wrapper)
+      }
+    }
+  }
+
+  private fun unregisterWithKey(api: NearbyHostApi, engineKey: Long, name: String) {
+    kotlin.synchronized(NearbyHostApiInstances) {
+      val list = NearbyHostApiInstances[name] ?: return
+      val removeKey =
+        if (list.any { it.api === api && it.engineKey == engineKey }) {
+          engineKey
+        } else {
+          list.filter { it.api === api }.map { it.engineKey }.distinct().singleOrNull() ?: return
+        }
+      val iterator = list.iterator()
+      while (iterator.hasNext()) {
+        val entry = iterator.next()
+        if (entry.api === api && entry.engineKey == removeKey) {
+          entry.api = null
+          iterator.remove()
+        }
+      }
+      if (list.isEmpty()) {
+        NearbyHostApiInstances.remove(name)
+      }
+    }
+  }
 
   companion object {
-    /** The codec used by NearbyHostApi. */
-    val codec: MessageCodec<Any?> by lazy {
-      MessagesPigeonCodec()
+    /**
+     * Returns the instance registered under [name] for the engine identified by
+     * [engineId].
+     *
+     * Falls back to the most recent instance registered for [affinityKey], then to
+     * the most recent instance overall. Either key may be `Long.MIN_VALUE` when it
+     * is unknown.
+     *
+     * This is called by the generated Dart code and is not intended for direct use.
+     */
+    @JvmStatic
+    @Keep
+    fun pigeonResolveInstance(engineId: Long, affinityKey: Long, name: String = defaultInstanceName): NearbyHostApiRegistrar? {
+      return kotlin.synchronized(NearbyHostApiInstances) {
+        val list = NearbyHostApiInstances[name] ?: return null
+        val exact = if (engineId != MessagesPigeonEngineKeys.NO_KEY) list.lastOrNull { it.engineKey == engineId } else null
+        val affine = if (affinityKey != MessagesPigeonEngineKeys.NO_KEY) list.lastOrNull { it.engineKey == affinityKey } else null
+        exact ?: affine ?: list.lastOrNull()
+      }
     }
-    /** Sets up an instance of `NearbyHostApi` to handle messages through the `binaryMessenger`. */
-    @JvmOverloads
-    fun setUp(binaryMessenger: BinaryMessenger, api: NearbyHostApi?, messageChannelSuffix: String = "") {
-      val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.startAdvertising$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val nameArg = args[0] as String
-            val serviceIdArg = args[1] as String
-            val strategyArg = args[2] as NearbyStrategy
-            CoroutineScope(Dispatchers.Main).launch {
-              val wrapped: List<Any?> = try {
-                api.startAdvertising(nameArg, serviceIdArg, strategyArg)
-                listOf(null)
-              } catch (exception: Throwable) {
-                MessagesPigeonUtils.wrapError(exception)
-              }
-              reply.reply(wrapped)
-            }
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+
+    /**
+     * Returns the engine key that [instance] was registered with, or
+     * `Long.MIN_VALUE` if it is unknown.
+     *
+     * This is called by the generated Dart code and is not intended for direct use.
+     */
+    @JvmStatic
+    @Keep
+    fun pigeonEngineKeyOf(instance: NearbyHostApiRegistrar): Long {
+      return instance.engineKey
+    }
+  }
+
+  suspend fun startAdvertising(name: String, serviceId: String, strategy: Long) {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      pigeonVar_api.startAdvertising(name, serviceId, NearbyStrategy.ofRaw(strategy.toInt())!!)
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.startDiscovery$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val serviceIdArg = args[0] as String
-            val strategyArg = args[1] as NearbyStrategy
-            CoroutineScope(Dispatchers.Main).launch {
-              val wrapped: List<Any?> = try {
-                api.startDiscovery(serviceIdArg, strategyArg)
-                listOf(null)
-              } catch (exception: Throwable) {
-                MessagesPigeonUtils.wrapError(exception)
-              }
-              reply.reply(wrapped)
-            }
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+    }
+  }
+  suspend fun startDiscovery(serviceId: String, strategy: Long) {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      pigeonVar_api.startDiscovery(serviceId, NearbyStrategy.ofRaw(strategy.toInt())!!)
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.requestConnection$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val nameArg = args[0] as String
-            val endpointIdArg = args[1] as String
-            CoroutineScope(Dispatchers.Main).launch {
-              val wrapped: List<Any?> = try {
-                api.requestConnection(nameArg, endpointIdArg)
-                listOf(null)
-              } catch (exception: Throwable) {
-                MessagesPigeonUtils.wrapError(exception)
-              }
-              reply.reply(wrapped)
-            }
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+    }
+  }
+  suspend fun requestConnection(name: String, endpointId: String) {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      pigeonVar_api.requestConnection(name, endpointId)
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.acceptConnection$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val endpointIdArg = args[0] as String
-            CoroutineScope(Dispatchers.Main).launch {
-              val wrapped: List<Any?> = try {
-                api.acceptConnection(endpointIdArg)
-                listOf(null)
-              } catch (exception: Throwable) {
-                MessagesPigeonUtils.wrapError(exception)
-              }
-              reply.reply(wrapped)
-            }
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+    }
+  }
+  suspend fun acceptConnection(endpointId: String) {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      pigeonVar_api.acceptConnection(endpointId)
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.rejectConnection$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val endpointIdArg = args[0] as String
-            CoroutineScope(Dispatchers.Main).launch {
-              val wrapped: List<Any?> = try {
-                api.rejectConnection(endpointIdArg)
-                listOf(null)
-              } catch (exception: Throwable) {
-                MessagesPigeonUtils.wrapError(exception)
-              }
-              reply.reply(wrapped)
-            }
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+    }
+  }
+  suspend fun rejectConnection(endpointId: String) {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      pigeonVar_api.rejectConnection(endpointId)
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.sendBytes$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val endpointIdsArg = args[0] as List<String>
-            val bytesArg = args[1] as ByteArray
-            CoroutineScope(Dispatchers.Main).launch {
-              val wrapped: List<Any?> = try {
-                listOf(api.sendBytes(endpointIdsArg, bytesArg))
-              } catch (exception: Throwable) {
-                MessagesPigeonUtils.wrapError(exception)
-              }
-              reply.reply(wrapped)
-            }
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+    }
+  }
+  suspend fun sendBytes(bytes: ByteArray, pigeonVar_args: ByteArray): Long {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      val pigeonVar_decodedArgs = MessagesPigeonInteropCodec.decodeArguments(pigeonVar_args)
+      val pigeonVar_arg_endpointIds = pigeonVar_decodedArgs[0] as List<String>
+      return pigeonVar_api.sendBytes(pigeonVar_arg_endpointIds, bytes)
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.sendFile$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val endpointIdsArg = args[0] as List<String>
-            val pathArg = args[1] as String
-            CoroutineScope(Dispatchers.Main).launch {
-              val wrapped: List<Any?> = try {
-                listOf(api.sendFile(endpointIdsArg, pathArg))
-              } catch (exception: Throwable) {
-                MessagesPigeonUtils.wrapError(exception)
-              }
-              reply.reply(wrapped)
-            }
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+    }
+  }
+  suspend fun sendFile(path: String, pigeonVar_args: ByteArray): Long {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      val pigeonVar_decodedArgs = MessagesPigeonInteropCodec.decodeArguments(pigeonVar_args)
+      val pigeonVar_arg_endpointIds = pigeonVar_decodedArgs[0] as List<String>
+      return pigeonVar_api.sendFile(pigeonVar_arg_endpointIds, path)
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.cancelPayload$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val payloadIdArg = args[0] as Long
-            val wrapped: List<Any?> = try {
-              api.cancelPayload(payloadIdArg)
-              listOf(null)
-            } catch (exception: Throwable) {
-              MessagesPigeonUtils.wrapError(exception)
-            }
-            reply.reply(wrapped)
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+    }
+  }
+  fun cancelPayload(payloadId: Long) {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      pigeonVar_api.cancelPayload(payloadId)
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopAdvertising$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { _, reply ->
-            val wrapped: List<Any?> = try {
-              api.stopAdvertising()
-              listOf(null)
-            } catch (exception: Throwable) {
-              MessagesPigeonUtils.wrapError(exception)
-            }
-            reply.reply(wrapped)
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+    }
+  }
+  fun stopAdvertising() {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      pigeonVar_api.stopAdvertising()
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopDiscovery$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { _, reply ->
-            val wrapped: List<Any?> = try {
-              api.stopDiscovery()
-              listOf(null)
-            } catch (exception: Throwable) {
-              MessagesPigeonUtils.wrapError(exception)
-            }
-            reply.reply(wrapped)
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+    }
+  }
+  fun stopDiscovery() {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      pigeonVar_api.stopDiscovery()
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.disconnect$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val endpointIdArg = args[0] as String
-            val wrapped: List<Any?> = try {
-              api.disconnect(endpointIdArg)
-              listOf(null)
-            } catch (exception: Throwable) {
-              MessagesPigeonUtils.wrapError(exception)
-            }
-            reply.reply(wrapped)
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+    }
+  }
+  fun disconnect(endpointId: String) {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      pigeonVar_api.disconnect(endpointId)
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.native_nearby_connections.NearbyHostApi.stopAllEndpoints$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { _, reply ->
-            val wrapped: List<Any?> = try {
-              api.stopAllEndpoints()
-              listOf(null)
-            } catch (exception: Throwable) {
-              MessagesPigeonUtils.wrapError(exception)
-            }
-            reply.reply(wrapped)
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
+    }
+  }
+  fun stopAllEndpoints() {
+    val pigeonVar_api = this.api ?: throw FlutterError("unregistered-instance", "NearbyHostApi has not been registered.")
+    try {
+      pigeonVar_api.stopAllEndpoints()
+    } catch (e: FlutterError) {
+      throw FlutterError(e.code, e.message, MessagesPigeonInteropCodec.encodeOrNull(e.details)).apply {
+        stackTrace = e.stackTrace
       }
     }
   }
@@ -767,162 +888,170 @@ interface NearbyHostApi {
  *
  * Generated class from Pigeon that represents Flutter messages that can be called from Kotlin.
  */
-class NearbyFlutterApi(private val binaryMessenger: BinaryMessenger, private val messageChannelSuffix: String = "") {
-  companion object {
-    /** The codec used by NearbyFlutterApi. */
-    val codec: MessageCodec<Any?> by lazy {
-      MessagesPigeonCodec()
+/** A registered [NearbyFlutterApi] and the keys of the engine it belongs to. */
+class NearbyFlutterApiRegistration(val api: NearbyFlutterApi, val engineId: Long, val affinityKey: Long)
+
+/// Map that stores instances
+val registeredNearbyFlutterApi: MutableMap<String, MutableList<NearbyFlutterApiRegistration>> = mutableMapOf()
+
+/// Class that stores instances
+@Keep
+class NearbyFlutterApiRegistrar() {
+  /**
+   * Registers [api] under [name] (or the default instance when [name] is omitted)
+   * for the engine identified by [engineId] and [affinityKey].
+   *
+   * Either key may be `Long.MIN_VALUE` when it is unknown. Registering an
+   * instance that is already registered under [name] updates its keys and keeps
+   * its position.
+   *
+   * This is called by the generated Dart code and is not intended for direct use.
+   */
+  @Keep
+  fun registerInstance(api: NearbyFlutterApiBridge, engineId: Long, affinityKey: Long, name: String = defaultInstanceName) {
+    kotlin.synchronized(registeredNearbyFlutterApi) {
+      val list = registeredNearbyFlutterApi.getOrPut(name) { mutableListOf() }
+      val registration = NearbyFlutterApiRegistration(NearbyFlutterApiBridgeAdapter(api), engineId, affinityKey)
+      val index = list.indexOfFirst { (it.api as? NearbyFlutterApiBridgeAdapter)?.bridge === api }
+      if (index >= 0) {
+        list[index] = registration
+      } else {
+        list.add(registration)
+      }
     }
   }
+
+  /**
+   * Removes [api] from the registrations under [name] (or the default instance
+   * when [name] is omitted), leaving other registrations in place.
+   *
+   * Instances are matched by identity. Does nothing if [api] is not registered.
+   *
+   * This is called by the generated Dart code and is not intended for direct use.
+   */
+  @Keep
+  fun unregisterInstance(api: NearbyFlutterApiBridge, name: String = defaultInstanceName) {
+    kotlin.synchronized(registeredNearbyFlutterApi) {
+      val list = registeredNearbyFlutterApi[name] ?: return
+      list.removeAll { (it.api as? NearbyFlutterApiBridgeAdapter)?.bridge === api }
+      if (list.isEmpty()) {
+        registeredNearbyFlutterApi.remove(name)
+      }
+    }
+  }
+
+  /**
+   * Returns the instance registered under [name] (or the default instance when
+   * [name] is omitted) by the Dart code running on the engine of the plugin binding [binding].
+   *
+   * When no instance is known to belong to that engine, falls back to the most
+   * recent registration for [name]. Returns null if none is registered.
+   */
+  @Keep
+  fun getInstance(binding: FlutterPlugin.FlutterPluginBinding, name: String = defaultInstanceName): NearbyFlutterApi? {
+    return getInstanceWithKey(MessagesPigeonEngineKeys.keyOf(binding), name)
+  }
+
+  /**
+   * Returns the instance registered under [name] (or the default instance when
+   * [name] is omitted) by the Dart code running on the engine of [engine].
+   *
+   * When no instance is known to belong to that engine, falls back to the most
+   * recent registration for [name]. Returns null if none is registered.
+   */
+  @Keep
+  fun getInstance(engine: FlutterEngine, name: String = defaultInstanceName): NearbyFlutterApi? {
+    return getInstanceWithKey(MessagesPigeonEngineKeys.keyOf(engine), name)
+  }
+
+  private fun getInstanceWithKey(engineKey: Long, name: String): NearbyFlutterApi? {
+    kotlin.synchronized(registeredNearbyFlutterApi) {
+      val list = registeredNearbyFlutterApi[name] ?: return null
+      if (engineKey != MessagesPigeonEngineKeys.NO_KEY) {
+        // Prefer the isolate running on the engine over isolates that only
+        // learned an affinity for it.
+        val match = list.lastOrNull { it.engineId == engineKey } ?: list.lastOrNull { it.affinityKey == engineKey }
+        if (match != null) {
+          return match.api
+        }
+      }
+      return list.lastOrNull()?.api
+    }
+  }
+}
+interface NearbyFlutterApi {
   /** Discovery found an advertiser with the same service id. */
-  suspend fun onEndpointFound(infoArg: EndpointInfo)
-{
-    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
-    return suspendCancellableCoroutine { continuation ->
-      val channelName = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onEndpointFound$separatedMessageChannelSuffix"
-      val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
-      channel.send(listOf(infoArg)) {
-        if (it is List<*>) {
-          if (it.size > 1) {
-            continuation.resumeWithException(FlutterError(it[0] as String, it[1] as String, it[2] as String?))
-          } else {
-            continuation.resume(Unit)
-          }
-        } else {
-          continuation.resumeWithException(MessagesPigeonUtils.createConnectionError(channelName))
-        } 
-      }
-    }
-  }
+  fun onEndpointFound(info: EndpointInfo)
   /** A previously found advertiser is no longer reachable. */
-  suspend fun onEndpointLost(endpointIdArg: String)
-{
-    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
-    return suspendCancellableCoroutine { continuation ->
-      val channelName = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onEndpointLost$separatedMessageChannelSuffix"
-      val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
-      channel.send(listOf(endpointIdArg)) {
-        if (it is List<*>) {
-          if (it.size > 1) {
-            continuation.resumeWithException(FlutterError(it[0] as String, it[1] as String, it[2] as String?))
-          } else {
-            continuation.resume(Unit)
-          }
-        } else {
-          continuation.resumeWithException(MessagesPigeonUtils.createConnectionError(channelName))
-        } 
-      }
-    }
-  }
+  fun onEndpointLost(endpointId: String)
   /**
    * A connection was requested, by either side. Both sides must call
    * `acceptConnection` (ideally after users compare [ConnectionInfo.authDigits])
    * or `rejectConnection`.
    */
-  suspend fun onConnectionInitiated(endpointIdArg: String, infoArg: ConnectionInfo)
-{
-    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
-    return suspendCancellableCoroutine { continuation ->
-      val channelName = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onConnectionInitiated$separatedMessageChannelSuffix"
-      val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
-      channel.send(listOf(endpointIdArg, infoArg)) {
-        if (it is List<*>) {
-          if (it.size > 1) {
-            continuation.resumeWithException(FlutterError(it[0] as String, it[1] as String, it[2] as String?))
-          } else {
-            continuation.resume(Unit)
-          }
-        } else {
-          continuation.resumeWithException(MessagesPigeonUtils.createConnectionError(channelName))
-        } 
-      }
-    }
-  }
+  fun onConnectionInitiated(endpointId: String, info: ConnectionInfo)
   /**
    * Outcome of a connection request, using Android `ConnectionsStatusCodes`:
    * 0 = connected, 8004 = rejected by one or both sides, 13 = connection
    * broke before it was accepted.
    */
-  suspend fun onConnectionResult(endpointIdArg: String, statusCodeArg: Long)
-{
-    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
-    return suspendCancellableCoroutine { continuation ->
-      val channelName = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onConnectionResult$separatedMessageChannelSuffix"
-      val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
-      channel.send(listOf(endpointIdArg, statusCodeArg)) {
-        if (it is List<*>) {
-          if (it.size > 1) {
-            continuation.resumeWithException(FlutterError(it[0] as String, it[1] as String, it[2] as String?))
-          } else {
-            continuation.resume(Unit)
-          }
-        } else {
-          continuation.resumeWithException(MessagesPigeonUtils.createConnectionError(channelName))
-        } 
-      }
-    }
-  }
+  fun onConnectionResult(endpointId: String, statusCode: Long)
   /** The connection ended. No more data can be sent or received. */
-  suspend fun onDisconnected(endpointIdArg: String)
-{
-    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
-    return suspendCancellableCoroutine { continuation ->
-      val channelName = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onDisconnected$separatedMessageChannelSuffix"
-      val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
-      channel.send(listOf(endpointIdArg)) {
-        if (it is List<*>) {
-          if (it.size > 1) {
-            continuation.resumeWithException(FlutterError(it[0] as String, it[1] as String, it[2] as String?))
-          } else {
-            continuation.resume(Unit)
-          }
-        } else {
-          continuation.resumeWithException(MessagesPigeonUtils.createConnectionError(channelName))
-        } 
-      }
-    }
-  }
+  fun onDisconnected(endpointId: String)
   /**
    * A payload started arriving. Bytes payloads are complete here; wait for
    * [onPayloadTransferUpdate] success before reading a file payload.
    */
-  suspend fun onPayloadReceived(endpointIdArg: String, payloadArg: PayloadMessage)
-{
-    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
-    return suspendCancellableCoroutine { continuation ->
-      val channelName = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onPayloadReceived$separatedMessageChannelSuffix"
-      val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
-      channel.send(listOf(endpointIdArg, payloadArg)) {
-        if (it is List<*>) {
-          if (it.size > 1) {
-            continuation.resumeWithException(FlutterError(it[0] as String, it[1] as String, it[2] as String?))
-          } else {
-            continuation.resume(Unit)
-          }
-        } else {
-          continuation.resumeWithException(MessagesPigeonUtils.createConnectionError(channelName))
-        } 
-      }
-    }
-  }
+  fun onPayloadReceived(endpointId: String, payload: PayloadMessage)
   /** Progress of a payload being sent or received. */
-  suspend fun onPayloadTransferUpdate(endpointIdArg: String, updateArg: TransferUpdate)
-{
-    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
-    return suspendCancellableCoroutine { continuation ->
-      val channelName = "dev.flutter.pigeon.native_nearby_connections.NearbyFlutterApi.onPayloadTransferUpdate$separatedMessageChannelSuffix"
-      val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
-      channel.send(listOf(endpointIdArg, updateArg)) {
-        if (it is List<*>) {
-          if (it.size > 1) {
-            continuation.resumeWithException(FlutterError(it[0] as String, it[1] as String, it[2] as String?))
-          } else {
-            continuation.resume(Unit)
-          }
-        } else {
-          continuation.resumeWithException(MessagesPigeonUtils.createConnectionError(channelName))
-        } 
-      }
-    }
+  fun onPayloadTransferUpdate(endpointId: String, update: TransferUpdate)
+}
+
+/**
+ * The interface that Dart implements for [NearbyFlutterApi].
+ *
+ * Values that the native interop transport passes directly are their own
+ * arguments and return values. All other arguments are encoded into one
+ * buffer, and other return values are returned in one.
+ */
+@Keep
+interface NearbyFlutterApiBridge {
+  fun onEndpointFound(pigeonVar_args: ByteArray)
+  fun onEndpointLost(endpointId: String)
+  fun onConnectionInitiated(endpointId: String, pigeonVar_args: ByteArray)
+  fun onConnectionResult(endpointId: String, statusCode: Long)
+  fun onDisconnected(endpointId: String)
+  fun onPayloadReceived(endpointId: String, pigeonVar_args: ByteArray)
+  fun onPayloadTransferUpdate(endpointId: String, pigeonVar_args: ByteArray)
+}
+
+private class NearbyFlutterApiBridgeAdapter(val bridge: NearbyFlutterApiBridge) : NearbyFlutterApi {
+  override fun onEndpointFound(info: EndpointInfo)
+ {
+    this.bridge.onEndpointFound(MessagesPigeonInteropCodec.encode(listOf<Any?>(info)))
+  }
+  override fun onEndpointLost(endpointId: String)
+ {
+    this.bridge.onEndpointLost(endpointId)
+  }
+  override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo)
+ {
+    this.bridge.onConnectionInitiated(endpointId, MessagesPigeonInteropCodec.encode(listOf<Any?>(info)))
+  }
+  override fun onConnectionResult(endpointId: String, statusCode: Long)
+ {
+    this.bridge.onConnectionResult(endpointId, statusCode)
+  }
+  override fun onDisconnected(endpointId: String)
+ {
+    this.bridge.onDisconnected(endpointId)
+  }
+  override fun onPayloadReceived(endpointId: String, payload: PayloadMessage)
+ {
+    this.bridge.onPayloadReceived(endpointId, MessagesPigeonInteropCodec.encode(listOf<Any?>(payload)))
+  }
+  override fun onPayloadTransferUpdate(endpointId: String, update: TransferUpdate)
+ {
+    this.bridge.onPayloadTransferUpdate(endpointId, MessagesPigeonInteropCodec.encode(listOf<Any?>(update)))
   }
 }
