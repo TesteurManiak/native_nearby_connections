@@ -77,18 +77,18 @@ class NativeNearbyConnections {
       _p.sendFile(endpointIds, path);
 
   /// Cancels an in-flight payload sent or being received.
-  Future<void> cancelPayload(int payloadId) => _p.cancelPayload(payloadId);
+  void cancelPayload(int payloadId) => _p.cancelPayload(payloadId);
 
   /// Stops advertising. Existing connections stay open.
-  Future<void> stopAdvertising() => _p.stopAdvertising();
+  void stopAdvertising() => _p.stopAdvertising();
 
   /// Stops discovery. Already found endpoints can still be connected to;
   /// existing connections stay open.
-  Future<void> stopDiscovery() => _p.stopDiscovery();
+  void stopDiscovery() => _p.stopDiscovery();
 
   /// Closes the connection to [endpointId].
-  Future<void> disconnect(String endpointId) => _p.disconnect(endpointId);
+  void disconnect(String endpointId) => _p.disconnect(endpointId);
 
   /// Stops advertising and discovery and disconnects from every endpoint.
-  Future<void> stopAllEndpoints() => _p.stopAllEndpoints();
+  void stopAllEndpoints() => _p.stopAllEndpoints();
 }

@@ -5,14 +5,17 @@ import 'gen/messages.g.dart';
 
 /// An implementation of [NativeNearbyConnectionsPlatform] backed by Pigeon.
 class PigeonNativeNearbyConnections extends NativeNearbyConnectionsPlatform {
-  PigeonNativeNearbyConnections({@visibleForTesting NearbyHostApi? hostApi})
-    : _apiOverride = hostApi;
+  PigeonNativeNearbyConnections({
+    @visibleForTesting NearbyHostApiForNativeInterop? hostApi,
+  }) : _apiOverride = hostApi;
 
-  final NearbyHostApi? _apiOverride;
+  final NearbyHostApiForNativeInterop? _apiOverride;
 
   // Lazy: Dart plugin registration runs before the native interop is ready.
-  late final NearbyHostApi _api =
-      _apiOverride ?? NearbyHostApi.createWithNativeInteropApi();
+  late final NearbyHostApiForNativeInterop _api =
+      _apiOverride ??
+      NearbyHostApiForNativeInterop.getInstance() ??
+      (throw ArgumentError('No NearbyHostApi instance is registered.'));
 
   @override
   void setListener(NearbyFlutterApi? listener) =>
@@ -50,17 +53,17 @@ class PigeonNativeNearbyConnections extends NativeNearbyConnectionsPlatform {
       _api.sendFile(endpointIds, path);
 
   @override
-  Future<void> cancelPayload(int payloadId) => _api.cancelPayload(payloadId);
+  void cancelPayload(int payloadId) => _api.cancelPayload(payloadId);
 
   @override
-  Future<void> stopAdvertising() => _api.stopAdvertising();
+  void stopAdvertising() => _api.stopAdvertising();
 
   @override
-  Future<void> stopDiscovery() => _api.stopDiscovery();
+  void stopDiscovery() => _api.stopDiscovery();
 
   @override
-  Future<void> disconnect(String endpointId) => _api.disconnect(endpointId);
+  void disconnect(String endpointId) => _api.disconnect(endpointId);
 
   @override
-  Future<void> stopAllEndpoints() => _api.stopAllEndpoints();
+  void stopAllEndpoints() => _api.stopAllEndpoints();
 }
