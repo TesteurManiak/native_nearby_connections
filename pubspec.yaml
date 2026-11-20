@@ -1,6 +1,6 @@
 name: native_nearby_connections
 description: "Google Nearby Connections for Flutter (Android and iOS), built on Pigeon."
-version: 1.0.0
+version: 0.1.0
 homepage:
 
 environment:

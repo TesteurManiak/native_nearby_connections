@@ -4,6 +4,8 @@
 
 Flutter plugin for [Google Nearby Connections](https://developers.google.com/nearby/connections/overview) (Android and iOS), using [Pigeon](https://pub.dev/packages/pigeon) Native Interop (JNI on Android and FFI on iOS).
 
+:warning: This plugin is in early development, the API may change and instability is expected.
+
 ## Usage
 
 ```dart
