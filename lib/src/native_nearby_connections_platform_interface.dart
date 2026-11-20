@@ -57,18 +57,18 @@ abstract class NativeNearbyConnectionsPlatform extends PlatformInterface {
   Future<int> sendFile(List<String> endpointIds, String path) =>
       throw UnimplementedError('sendFile() has not been implemented.');
 
-  Future<void> cancelPayload(int payloadId) =>
+  void cancelPayload(int payloadId) =>
       throw UnimplementedError('cancelPayload() has not been implemented.');
 
-  Future<void> stopAdvertising() =>
+  void stopAdvertising() =>
       throw UnimplementedError('stopAdvertising() has not been implemented.');
 
-  Future<void> stopDiscovery() =>
+  void stopDiscovery() =>
       throw UnimplementedError('stopDiscovery() has not been implemented.');
 
-  Future<void> disconnect(String endpointId) =>
+  void disconnect(String endpointId) =>
       throw UnimplementedError('disconnect() has not been implemented.');
 
-  Future<void> stopAllEndpoints() =>
+  void stopAllEndpoints() =>
       throw UnimplementedError('stopAllEndpoints() has not been implemented.');
 }

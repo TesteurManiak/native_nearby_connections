@@ -18,7 +18,7 @@ public class NativeNearbyConnectionsPlugin: NSObject {
   private static let statusError: Int64 = 13
   private static let statusRejected: Int64 = 8004
 
-  private let flutterApi: NearbyFlutterApi
+  private let registrar: FlutterPluginRegistrar
   private var advertiser: Advertiser?
   private var discoverer: Discoverer?
   /// The SDK only holds these weakly, and they relay callbacks for connections they
@@ -33,13 +33,16 @@ public class NativeNearbyConnectionsPlugin: NSObject {
   private var connected: Set<String> = []
   private var tokens: [Int64: CancellationToken] = [:]
 
-  init(flutterApi: NearbyFlutterApi) {
-    self.flutterApi = flutterApi
+  init(registrar: FlutterPluginRegistrar) {
+    self.registrar = registrar
   }
 
-  private func emit(_ call: @escaping @MainActor (NearbyFlutterApi) async throws -> Void) {
+  private func emit(_ call: @escaping @MainActor (NearbyFlutterApi) throws -> Void) {
     // A missing Dart listener must not crash native callbacks.
-    Task { @MainActor in try? await call(flutterApi) }
+    Task { @MainActor in
+      guard let api = NearbyFlutterApiRegistrar.getInstance(registrar: registrar) else { return }
+      try? call(api)
+    }
   }
 
   private func forget(_ endpointId: String) {
@@ -88,14 +91,13 @@ public class NativeNearbyConnectionsPlugin: NSObject {
 
 extension NativeNearbyConnectionsPlugin: @preconcurrency FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
-    let messenger = registrar.messenger()
-    let instance = NativeNearbyConnectionsPlugin(flutterApi: NearbyFlutterApi(binaryMessenger: messenger))
-    NearbyHostApiSetup.setUp(binaryMessenger: messenger, api: instance)
+    let instance = NativeNearbyConnectionsPlugin(registrar: registrar)
     registrar.publish(instance)
+    NearbyHostApiSetup.register(api: instance, registrar: registrar)
   }
 
   public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
-    NearbyHostApiSetup.setUp(binaryMessenger: registrar.messenger(), api: nil)
+    NearbyHostApiSetup.unregister(api: self, registrar: registrar)
     try? stopAllEndpoints()
   }
 }
@@ -150,9 +152,9 @@ extension NativeNearbyConnectionsPlugin: @preconcurrency NearbyHostApi {
     verify(false)
   }
 
-  func sendBytes(endpointIds: [String], bytes: FlutterStandardTypedData) async throws -> Int64 {
+  func sendBytes(endpointIds: [String], bytes: [UInt8]) async throws -> Int64 {
     try await send(to: endpointIds) { manager, ids, id in
-      { manager.send(bytes.data, to: ids, id: id, completionHandler: $0) }
+      { manager.send(Data(bytes), to: ids, id: id, completionHandler: $0) }
     }
   }
 
@@ -202,12 +204,12 @@ extension NativeNearbyConnectionsPlugin: @preconcurrency DiscovererDelegate {
     managers[endpointID] = discoverer.connectionManager
     names[endpointID] = name
     let info = EndpointInfo(endpointId: endpointID, name: name, serviceId: discoverer.connectionManager.serviceID)
-    emit { try await $0.onEndpointFound(info: info) }
+    emit { try $0.onEndpointFound(info: info) }
   }
 
   public func discoverer(_ discoverer: Discoverer, didLose endpointID: EndpointID) {
     if !connected.contains(endpointID) && verifications[endpointID] == nil { forget(endpointID) }
-    emit { try await $0.onEndpointLost(endpointId: endpointID) }
+    emit { try $0.onEndpointLost(endpointId: endpointID) }
   }
 }
 
@@ -234,7 +236,7 @@ extension NativeNearbyConnectionsPlugin: @preconcurrency ConnectionManagerDelega
     let info = ConnectionInfo(
       endpointName: names[endpointID], authDigits: verificationCode,
       isIncoming: incoming.contains(endpointID))
-    emit { try await $0.onConnectionInitiated(endpointId: endpointID, info: info) }
+    emit { try $0.onConnectionInitiated(endpointId: endpointID, info: info) }
   }
 
   public func connectionManager(
@@ -245,17 +247,17 @@ extension NativeNearbyConnectionsPlugin: @preconcurrency ConnectionManagerDelega
       return
     case .connected:
       connected.insert(endpointID)
-      emit { try await $0.onConnectionResult(endpointId: endpointID, statusCode: Self.statusOK) }
+      emit { try $0.onConnectionResult(endpointId: endpointID, statusCode: Self.statusOK) }
     case .rejected:
       forget(endpointID)
-      emit { try await $0.onConnectionResult(endpointId: endpointID, statusCode: Self.statusRejected) }
+      emit { try $0.onConnectionResult(endpointId: endpointID, statusCode: Self.statusRejected) }
     case .disconnected:
       let wasConnected = connected.contains(endpointID)
       forget(endpointID)
       if wasConnected {
-        emit { try await $0.onDisconnected(endpointId: endpointID) }
+        emit { try $0.onDisconnected(endpointId: endpointID) }
       } else {
-        emit { try await $0.onConnectionResult(endpointId: endpointID, statusCode: Self.statusError) }
+        emit { try $0.onConnectionResult(endpointId: endpointID, statusCode: Self.statusError) }
       }
     }
   }
@@ -264,8 +266,8 @@ extension NativeNearbyConnectionsPlugin: @preconcurrency ConnectionManagerDelega
     _ connectionManager: ConnectionManager, didReceive data: Data, withID payloadID: PayloadID,
     from endpointID: EndpointID
   ) {
-    let payload = PayloadMessage(id: payloadID, type: 1, bytes: FlutterStandardTypedData(bytes: data))
-    emit { try await $0.onPayloadReceived(endpointId: endpointID, payload: payload) }
+    let payload = PayloadMessage(id: payloadID, type: 1, bytes: [UInt8](data))
+    emit { try $0.onPayloadReceived(endpointId: endpointID, payload: payload) }
   }
 
   public func connectionManager(
@@ -274,7 +276,7 @@ extension NativeNearbyConnectionsPlugin: @preconcurrency ConnectionManagerDelega
   ) {
     // Streams aren't part of the Pigeon API; surface the payload so Dart can cancel it.
     tokens[payloadID] = token
-    emit { try await $0.onPayloadReceived(endpointId: endpointID, payload: PayloadMessage(id: payloadID, type: 3)) }
+    emit { try $0.onPayloadReceived(endpointId: endpointID, payload: PayloadMessage(id: payloadID, type: 3)) }
   }
 
   public func connectionManager(
@@ -284,7 +286,7 @@ extension NativeNearbyConnectionsPlugin: @preconcurrency ConnectionManagerDelega
   ) {
     tokens[payloadID] = token
     let payload = PayloadMessage(id: payloadID, type: 2, filePath: localURL.path)
-    emit { try await $0.onPayloadReceived(endpointId: endpointID, payload: payload) }
+    emit { try $0.onPayloadReceived(endpointId: endpointID, payload: payload) }
   }
 
   public func connectionManager(
@@ -303,6 +305,6 @@ extension NativeNearbyConnectionsPlugin: @preconcurrency ConnectionManagerDelega
         totalBytes: progress.totalUnitCount)
     }
     if message.status != 3 { tokens[payloadID] = nil }
-    emit { try await $0.onPayloadTransferUpdate(endpointId: endpointID, update: message) }
+    emit { try $0.onPayloadTransferUpdate(endpointId: endpointID, update: message) }
   }
 }

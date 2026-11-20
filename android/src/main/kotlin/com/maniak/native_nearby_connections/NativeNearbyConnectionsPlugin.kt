@@ -24,18 +24,18 @@ import kotlinx.coroutines.tasks.await
 /** NativeNearbyConnectionsPlugin: bridges Google Nearby Connections to Dart via Pigeon. */
 class NativeNearbyConnectionsPlugin : FlutterPlugin, NearbyHostApi {
     private lateinit var client: ConnectionsClient
-    private lateinit var flutterApi: NearbyFlutterApi
+    private lateinit var binding: FlutterPlugin.FlutterPluginBinding
     private lateinit var scope: CoroutineScope
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         client = Nearby.getConnectionsClient(binding.applicationContext)
-        flutterApi = NearbyFlutterApi(binding.binaryMessenger)
+        this.binding = binding
         scope = MainScope()
-        NearbyHostApi.setUp(binding.binaryMessenger, this)
+        NearbyHostApiRegistrar().register(this, binding)
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        NearbyHostApi.setUp(binding.binaryMessenger, null)
+        NearbyHostApiRegistrar().unregister(this, binding)
         client.stopAdvertising()
         client.stopDiscovery()
         client.stopAllEndpoints()
@@ -43,8 +43,8 @@ class NativeNearbyConnectionsPlugin : FlutterPlugin, NearbyHostApi {
     }
 
     /** Fire-and-forget to Dart; a missing Dart listener must not crash native callbacks. */
-    private fun emit(block: suspend NearbyFlutterApi.() -> Unit) {
-        scope.launch { runCatching { flutterApi.block() } }
+    private fun emit(block: NearbyFlutterApi.() -> Unit) {
+        scope.launch { runCatching { NearbyFlutterApiRegistrar().getInstance(binding)?.block() } }
     }
 
     private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {

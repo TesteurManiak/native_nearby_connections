@@ -21,8 +21,14 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "native_nearby_connections_objc_gen",
+            dependencies: [],
+            publicHeadersPath: "."
+        ),
+        .target(
             name: "native_nearby_connections",
             dependencies: [
+                "native_nearby_connections_objc_gen",
                 .product(name: "FlutterFramework", package: "FlutterFramework"),
                 .product(name: "NearbyConnections", package: "nearby"),
             ],

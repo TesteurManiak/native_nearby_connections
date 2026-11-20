@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:developer';
 import 'dart:io';
@@ -87,7 +88,7 @@ class ConnectionManager extends ChangeNotifier implements NearbyFlutterApi {
   ].request();
 
   /// Runs [action], logs the outcome and returns whether it succeeded.
-  Future<bool> _run(String label, Future<void> Function() action) async {
+  Future<bool> _run(String label, FutureOr<void> Function() action) async {
     try {
       await action();
       _add(label);
@@ -122,10 +123,10 @@ class ConnectionManager extends ChangeNotifier implements NearbyFlutterApi {
   }
 
   Future<void> stop() async {
-    await _run('Stopped', () async {
-      await _nearby.stopAdvertising();
-      await _nearby.stopDiscovery();
-      await _nearby.stopAllEndpoints();
+    await _run('Stopped', () {
+      _nearby.stopAdvertising();
+      _nearby.stopDiscovery();
+      _nearby.stopAllEndpoints();
     });
     _update(() {
       advertising = discovering = false;

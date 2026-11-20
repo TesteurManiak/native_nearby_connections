@@ -2,12 +2,19 @@ import 'package:pigeon/pigeon.dart';
 
 @ConfigurePigeon(
   PigeonOptions(
+    appDirectory: './',
     dartOut: 'lib/src/gen/messages.g.dart',
     kotlinOut: 'android/src/main/kotlin/com/maniak/native_nearby_connections/Messages.g.kt',
     kotlinOptions: KotlinOptions(
       package: 'com.maniak.native_nearby_connections',
+      useJni: true,
+      appDirectory: 'example/',
     ),
     swiftOut: 'ios/native_nearby_connections/Sources/native_nearby_connections/Messages.g.swift',
+    swiftOptions: SwiftOptions(
+      useFfi: true,
+      ffiModuleName: 'native_nearby_connections',
+    ),
     dartPackageName: 'native_nearby_connections',
   ),
 )
